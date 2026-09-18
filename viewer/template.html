@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Shadow twin</title>
+<style>
+  html,body,#cesiumContainer{width:100%;height:100%;margin:0;padding:0;overflow:hidden}
+  body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#0d1014;
+       -webkit-text-size-adjust:100%;color:#f2f4f7}
+  .panel{position:absolute;background:rgba(16,18,22,.91);color:#f2f4f7;border-radius:10px;
+         padding:11px 13px;font-size:12.5px;line-height:1.45;box-shadow:0 6px 22px rgba(0,0,0,.5);
+         backdrop-filter:blur(4px);border:1px solid rgba(255,255,255,.07);
+         transition:opacity .28s ease}
+  .sec{font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:#79828f;margin:10px 0 5px}
+  .sec:first-child{margin-top:0}
+  #hdr{top:10px;left:10px;max-width:340px}
+  #hdr h1{margin:0 0 4px;font-size:14.5px;font-weight:600}
+  #hdr .sub{color:#a2abb7;font-size:11px}
+  #hdr .cav{color:#79828f;font-size:10px;margin-top:7px;border-top:1px solid rgba(255,255,255,.08);
+            padding-top:6px}
+  #hdr .by{color:#79828f;font-size:10px;margin-top:5px}
+  #hdr .by b{color:#a2abb7;font-weight:600}
+  #hdr .by a{color:#7aa7f0;text-decoration:none;cursor:pointer}
+  #hdr .by a:hover{text-decoration:underline}
+
+  #fixture{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:7;
+           background:#8f2d1b;color:#ffe9e3;border-radius:8px;padding:7px 14px;font-size:11px;
+           font-weight:600;box-shadow:0 6px 22px rgba(0,0,0,.5);
+           border:1px solid rgba(255,255,255,.14);white-space:nowrap;max-width:92vw;
+           overflow:hidden;text-overflow:ellipsis;display:none}
+
+  #about{left:50%;transform:translateX(-50%);top:10vh;display:none;
+         max-width:min(600px,92vw);max-height:76vh;overflow-y:auto;z-index:8}
+  #about h2{margin:0 0 3px;font-size:15px;font-weight:600}
+  #about .sub2{color:#a2abb7;font-size:11.5px;margin-bottom:11px}
+  #about .x{float:right;cursor:pointer;color:#79828f;font-size:16px;line-height:1}
+  #about p{margin:7px 0;font-size:11.5px;color:#c2cad4;line-height:1.6}
+  #about ul{margin:6px 0;padding-left:17px}
+  #about li{font-size:11.5px;color:#c2cad4;line-height:1.55;margin:3px 0}
+  #about .k{color:#79828f;font-size:10px;letter-spacing:.09em;
+            text-transform:uppercase;margin:14px 0 4px}
+  #about code{background:#0f1216;padding:1px 4px;border-radius:3px;font-size:10.5px;
+              font-family:ui-monospace,Menlo,Consolas,monospace}
+  #about .warn{color:#ffb4a0;border-left:2px solid #8f2d1b;padding-left:9px;margin:9px 0}
+
+  #ctrl{top:10px;right:10px;width:226px}
+  .btn{display:block;width:100%;margin:3px 0;padding:6px 9px;border:0;border-radius:6px;
+       background:#22262d;color:#c8d0da;font-size:11.5px;cursor:pointer;text-align:left}
+  .btn:hover{background:#2b3038}
+  .btn.on{background:#2f6fed;color:#fff}
+  .sl{margin:7px 0}
+  .slhead{display:flex;justify-content:space-between;align-items:baseline;
+          font-size:11px;color:#a2abb7;margin-bottom:3px;gap:8px}
+  .slhead .val{font-variant-numeric:tabular-nums;font-weight:600;color:#9ecbff;
+               white-space:nowrap;flex:none}
+  .sl input[type=range]{width:100%;display:block;margin:0;accent-color:#2f6fed}
+  .sl.off{opacity:.3;pointer-events:none}
+  .sunline{display:flex;justify-content:space-between;font-size:10px;color:#79828f;
+           margin-top:3px;font-variant-numeric:tabular-nums}
+  .dayseg{display:flex;gap:4px;margin:2px 0 4px}
+  .dayseg button{flex:1;border:0;background:#22262d;color:#a2abb7;font-size:11.5px;
+                 padding:7px 4px;border-radius:6px;cursor:pointer;font-weight:600}
+  .dayseg button.on{background:#2f6fed;color:#fff}
+  .dayseg button:hover{color:#e6ebf1}
+
+  #viewbar{position:absolute;left:50%;transform:translateX(-50%);bottom:26px;
+           display:flex;gap:6px;align-items:center;z-index:6;transition:opacity .28s ease}
+  .seg{display:flex;background:rgba(16,18,22,.91);border-radius:9px;padding:3px;
+       border:1px solid rgba(255,255,255,.08);box-shadow:0 6px 22px rgba(0,0,0,.5);
+       backdrop-filter:blur(4px)}
+  .seg button{border:0;background:transparent;color:#a2abb7;font-size:11.5px;
+              padding:6px 11px;border-radius:6px;cursor:pointer;white-space:nowrap}
+  .seg button:hover{color:#e6ebf1}
+  .seg button.on{background:#2f6fed;color:#fff;font-weight:600}
+
+  #legend{bottom:26px;left:10px;min-width:160px;max-width:196px}
+  #legend .lt{font-size:11px;color:#e6ebf1;font-weight:600;margin-bottom:5px}
+  #legend .lu{font-size:9.5px;color:#79828f;margin:-3px 0 6px}
+  #legend .row{display:flex;align-items:center;margin:2.5px 0;font-size:11px}
+  #legend .sw{width:22px;height:10px;border-radius:2px;margin-right:7px;flex:none;
+              border:1px solid rgba(255,255,255,.09)}
+  #stats{bottom:26px;right:10px;width:226px}
+  #stats table{width:100%;border-collapse:collapse;font-size:11px}
+  #stats td{padding:2px 0;vertical-align:top}
+  #stats td.k{color:#c2cad4}
+  #stats td.v{text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:#9ecbff;
+              white-space:nowrap;padding-left:8px}
+  #stats .exp{color:#79828f;font-size:9.5px;margin-top:7px;line-height:1.5;
+              border-top:1px solid rgba(255,255,255,.08);padding-top:6px}
+  #pick{left:50%;transform:translateX(-50%);bottom:76px;display:none;min-width:210px;
+        max-width:min(420px,92vw);z-index:6}
+  #pick .x{float:right;cursor:pointer;color:#79828f;font-size:14px;line-height:1;margin-left:8px}
+  #pick table{width:100%;border-collapse:collapse;font-size:11px}
+  #pick td{padding:1.5px 0}
+  #pick td.v{text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:#9ecbff}
+  #pick .note{color:#79828f;font-size:9.5px;padding-top:6px;line-height:1.5}
+
+  body.rec .panel,body.rec #viewbar{opacity:0;pointer-events:none}
+  body.rec #recbadge{opacity:1}
+  #recbadge{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);
+            opacity:0;transition:opacity .28s ease;pointer-events:none;z-index:6;
+            font-size:12px;color:#e6ebf1;letter-spacing:.04em;text-shadow:0 2px 12px #000;
+            text-align:center;line-height:1.5}
+  #recbadge b{font-weight:600}
+  #recbadge span{color:#9ecbff;font-variant-numeric:tabular-nums}
+
+  #boot{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+        background:#0d1014;color:#c9d1d9;z-index:9;font-size:13px;text-align:center;padding:24px}
+  #boot .inner{max-width:520px}
+  #boot code{background:#161a20;padding:2px 6px;border-radius:4px;display:inline-block;
+             margin:3px 0;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;
+             color:#9ecbff}
+  .cesium-widget-credits{font-size:9px !important}
+
+  @media (max-width:760px){
+    .panel{font-size:11px;padding:8px 10px;border-radius:8px}
+    #hdr{max-width:none;left:8px;right:8px;top:8px}
+    #hdr h1{font-size:12.5px} #hdr .sub{font-size:9.5px} #hdr .cav{display:none}
+    #hdr .by{font-size:9px;margin-top:3px}
+    #about{top:6vh;max-height:82vh}
+    #ctrl{top:auto;bottom:62px;left:8px;right:8px;width:auto;max-height:38vh;overflow-y:auto}
+    #viewbar{bottom:8px;left:8px;right:8px;transform:none;justify-content:center;flex-wrap:wrap}
+    .seg button{padding:5px 8px;font-size:10.5px}
+    #legend{bottom:auto;top:96px;left:8px;min-width:0;max-width:132px}
+    #legend .row{font-size:9.5px} #legend .sw{width:16px;height:8px;margin-right:5px}
+    #stats{bottom:auto;top:96px;right:8px;width:150px}
+    #stats table{font-size:9.5px} #stats .exp{display:none}
+    #pick{bottom:auto;top:280px}
+  }
+</style>
+</head>
+<body>
+<div id="cesiumContainer"></div>
+<div id="boot"><div class="inner">loading the scene<br>
+<span style="color:#5c646f;font-size:11px">first load pulls the map library and tiles</span></div></div>
+
+<div id="fixture"></div>
+<div id="recbadge"></div>
+
+<div class="panel" id="hdr">
+  <h1 id="hdrtitle">Shadow twin</h1>
+  <div class="sub" id="hdrsub"></div>
+  <div class="cav" id="hdrcav"></div>
+  <div class="by" id="hdrby"></div>
+</div>
+
+<div class="panel" id="about">
+  <span class="x" id="closeabout">&times;</span>
+  <h2>What this is</h2>
+  <div class="sub2" id="aboutsub"></div>
+  <div id="aboutbody"></div>
+</div>
+
+<div class="panel" id="ctrl">
+  <div class="sec">Day of year</div>
+  <div class="dayseg" id="dayseg"></div>
+
+  <div class="sl" id="timesl">
+    <div class="slhead"><span>local clock</span><span class="val" id="timeval">--:--</span></div>
+    <input type="range" id="time" min="0" max="0" step="1" value="0">
+    <div class="sunline"><span id="sunalt">altitude</span><span id="sunaz">azimuth</span></div>
+  </div>
+  <button class="btn" id="play">Play the day</button>
+
+  <div class="sec">View</div>
+  <div class="sl">
+    <div class="slhead"><span>overlay opacity</span><span class="val" id="opval">100%</span></div>
+    <input type="range" id="op" min="0" max="100" step="5" value="100">
+  </div>
+  <button class="btn on" id="tbuild">Buildings on</button>
+  <button class="btn" id="thome">Reset the camera</button>
+  <button class="btn" id="trec">Clean view for recording</button>
+</div>
+
+<div class="panel" id="legend">
+  <div class="lt" id="legtitle"></div>
+  <div class="lu" id="legunits"></div>
+  <div id="legrows"></div>
+</div>
+
+<div class="panel" id="stats">
+  <div class="sec" id="statshead">This area</div>
+  <table id="statstable"></table>
+  <div class="exp" id="statscope"></div>
+</div>
+
+<div class="panel" id="pick">
+  <span class="x" id="closepick">&times;</span>
+  <table id="picktable"></table>
+  <div class="note" id="picknote"></div>
+</div>
+
+<div id="viewbar">
+  <div class="seg" id="layerseg">
+    <button data-layer="shade" class="on">Shade now</button>
+    <button data-layer="sunhours">Sun hours</button>
+    <button data-layer="svf">Sky view</button>
+  </div>
+</div>
+
+<script>
+const DATA = /*__DATA__*/;
+
+/* ------------------------------------------------------------------ *
+ * Cesium loader.
+ * Local vendored copy first so the page works with no internet, then
+ * the CDN. If both fail, say exactly what to do instead of going blank.
+ * ------------------------------------------------------------------ */
+const CESIUM_SOURCES = [
+  { base: "vendor/Cesium/",
+    js: "vendor/Cesium/Cesium.js",
+    css: "vendor/Cesium/Widgets/widgets.css",
+    name: "local vendored copy" },
+  { base: "https://cesium.com/downloads/cesiumjs/releases/1.119/Build/Cesium/",
+    js: "https://cesium.com/downloads/cesiumjs/releases/1.119/Build/Cesium/Cesium.js",
+    css: "https://cesium.com/downloads/cesiumjs/releases/1.119/Build/Cesium/Widgets/widgets.css",
+    name: "Cesium CDN" }
+];
+
+function loadCesium() {
+  return new Promise((resolve, reject) => {
+    const attempt = i => {
+      if (i >= CESIUM_SOURCES.length) return reject(new Error("no source worked"));
+      const src = CESIUM_SOURCES[i];
+      window.CESIUM_BASE_URL = src.base;
+      const link = document.createElement("link");
+      link.rel = "stylesheet"; link.href = src.css;
+      document.head.appendChild(link);
+      const s = document.createElement("script");
+      s.src = src.js;
+      s.onload = () => (typeof Cesium !== "undefined") ? resolve(src) : attempt(i + 1);
+      s.onerror = () => attempt(i + 1);
+      document.head.appendChild(s);
+    };
+    attempt(0);
+  });
+}
+
+function bootFail() {
+  document.getElementById("boot").innerHTML = `<div class="inner">
+    <div style="font-size:14px;color:#ffb4a0;margin-bottom:10px">
+      Could not load the map library</div>
+    <div style="color:#8b94a0;font-size:11.5px;line-height:1.7">
+      No internet, or the Cesium CDN is blocked from here.<br><br>
+      To make this page work offline, once, with a connection:<br>
+      <code>npm install cesium@1.145.0</code><br>
+      then copy <code>node_modules/cesium/Build/Cesium</code><br>
+      into <code>vendor/Cesium</code> next to this file.<br><br>
+      After that it never needs the network again.
+    </div></div>`;
+}
+
+/* ------------------------------------------------------------------ *
+ * State
+ * ------------------------------------------------------------------ */
+const $ = id => document.getElementById(id);
+const fmt = (v, d = 2) => (v === null || v === undefined || Number.isNaN(v))
+  ? "--" : Number(v).toFixed(d);
+const pct = v => (v * 100).toFixed(1) + "%";
+
+let viewer, overlayLayer = null, buildingSource = null;
+let activeLayer = "shade";
+let dayIndex = 0, hourIndex = 0;
+let opacity = 1.0;
+let playing = false, playTimer = null;
+let recMode = false;
+
+const day = () => DATA.days[dayIndex];
+const hasSvf = () => DATA.svf !== null && DATA.svf !== undefined;
+
+/* ------------------------------------------------------------------ *
+ * Copy
+ * ------------------------------------------------------------------ */
+function renderCopy() {
+  const s = DATA.site, m = DATA.model;
+  $("hdrtitle").textContent = s.name;
+  $("hdrsub").textContent =
+    `${s.span_m} m across at ${s.cellsize_m} m per cell \u00b7 ` +
+    `tallest object in frame ${s.tallest_m} m (${s.tallest_ft} ft)`;
+  $("hdrcav").textContent =
+    "Direct sun and shade computed from LiDAR surface geometry. " +
+    "No temperature, no wind, no cloud. This is a shadow model.";
+  $("hdrby").innerHTML =
+    `built by <b>Adel</b> &middot; <a id="openabout">how it works and what it is not</a>`;
+  $("openabout").addEventListener("click", () => $("about").style.display = "block");
+
+  if (DATA.mode === "FIXTURE") {
+    $("fixture").style.display = "block";
+    $("fixture").textContent = "SYNTHETIC GEOMETRY \u00b7 test fixture, not real survey data";
+  }
+
+  $("aboutsub").textContent =
+    `${s.name}. ${s.grid[0]} by ${s.grid[1]} cells at ${s.cellsize_m} m.`;
+
+  const warn = DATA.mode === "FIXTURE"
+    ? `<p class="warn"><b>Read this first.</b> ${DATA.warning}</p>` : "";
+
+  const dayRows = DATA.days.map(d =>
+    `<li><b>${d.label}</b>: ${d.daylight_hours_modelled} daylight hours modelled, ` +
+    `sun peaks at ${fmt(d.peak_altitude, 1)}&deg; above the horizon.</li>`).join("");
+
+  $("aboutbody").innerHTML = warn + `
+    <p>For every patch of ground, at every hour, the model asks one question:
+    can this spot see the sun, or is something in the way. The answer comes from
+    the measured shape of the city and the calculated position of the sun.
+    Nothing else goes in.</p>
+
+    <div class="k">Where the geometry comes from</div>
+    <p>${m.surface_source}.</p>
+    <p>Native resolution ${m.native_resolution_m} m, ${m.resample}. Street level
+    from ${m.ground_source}.</p>
+
+    <div class="k">How the sun is placed</div>
+    <p>${m.solar_algorithm}, checked against solstice and equinox geometry that
+    can be derived by hand. Shadows use a ${m.shadow_method}.</p>
+    <ul>${dayRows}</ul>
+
+    <div class="k">What the numbers assume</div>
+    <ul>
+      <li>Max pooling was used when reducing resolution, which keeps roof heights
+          intact but grows each building by up to one cell. That errs toward more
+          shadow, not less.</li>
+      <li>Shadow edges land to the nearest cell, so each carries about
+          ${s.cellsize_m} m of uncertainty.</li>
+      <li>Buildings outside the frame cast no shadow here. On a winter afternoon a
+          tall tower throws a shadow over a kilometre long, so anything just
+          beyond the edge is missing from this view.</li>
+      <li>Cells within ${s.edge_margin_m} m of the edge are excluded from every
+          statistic and blanked in every image for the same reason.</li>
+      <li>Clear sky. Cloud is not modelled, so these are geometric sun hours and
+          the real figure on any given day is lower.</li>
+      <li>The survey is a snapshot. Anything built after the capture date is not
+          in it.</li>
+    </ul>
+
+    <div class="k">What this does not compute</div>
+    <p>${m.does_not_compute.join(", ")}. Shade is one input to how a place feels.
+    It is not the whole answer, and a shaded surface with no wind can still be
+    unpleasant.</p>
+
+    <div class="k">Reading the layers</div>
+    <ul>
+      <li><b>Shade now</b> is yes or no for a single instant. Drag the time slider.</li>
+      <li><b>Sun hours</b> totals how many modelled hours each patch spends in
+          direct sun across the whole day.</li>
+      ${hasSvf() ? `<li><b>Sky view</b> is the fraction of the sky hemisphere a point
+          can see, weighted the way sky radiation actually arrives. 1.0 is an open
+          field. A deep street canyon runs near 0.2.</li>` : ""}
+    </ul>
+
+    <div class="k">Colour</div>
+    <p>Fixed bins on stated thresholds, never stretched to the data, so two days
+    are directly comparable. Pixels stay square when you zoom because smoothing
+    them would imply detail that is not in the survey.</p>
+
+    <div class="k">Generated</div>
+    <p><code>${DATA.generated_utc}</code></p>`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Overlay
+ * ------------------------------------------------------------------ */
+function currentImage() {
+  if (activeLayer === "shade") return day().hours[hourIndex].png;
+  if (activeLayer === "sunhours") return day().sunhours.png;
+  return DATA.svf ? DATA.svf.png : day().sunhours.png;
+}
+
+async function drawOverlay() {
+  const b = DATA.site.bounds;
+  const rect = Cesium.Rectangle.fromDegrees(b.west, b.south, b.east, b.north);
+  const url = currentImage();
+  let provider;
+  if (Cesium.SingleTileImageryProvider.fromUrl) {
+    provider = await Cesium.SingleTileImageryProvider.fromUrl(url, { rectangle: rect });
+  } else {
+    provider = new Cesium.SingleTileImageryProvider({ url, rectangle: rect });
+  }
+  const next = viewer.imageryLayers.addImageryProvider(provider);
+  next.alpha = opacity;
+  next.magnificationFilter = Cesium.TextureMagnificationFilter.NEAREST;
+  if (overlayLayer) viewer.imageryLayers.remove(overlayLayer, true);
+  overlayLayer = next;
+}
+
+/* ------------------------------------------------------------------ *
+ * Buildings
+ * ------------------------------------------------------------------ */
+function buildingGeoJson() {
+  return {
+    type: "FeatureCollection",
+    features: DATA.buildings.map((b, i) => ({
+      type: "Feature", id: i,
+      properties: { height: b.height },
+      geometry: { type: "Polygon", coordinates: [b.ring.concat([b.ring[0]])] }
+    }))
+  };
+}
+
+function buildingColour(h) {
+  const t = Math.max(0, Math.min(1, (h - 15) / 240));
+  return Cesium.Color.fromCssColorString("#333b47")
+    .brighten(t * 0.42, new Cesium.Color()).withAlpha(0.97);
+}
+
+async function addBuildings() {
+  if (!DATA.buildings || !DATA.buildings.length) return;
+  const src = await Cesium.GeoJsonDataSource.load(buildingGeoJson(), { clampToGround: false });
+  src.entities.values.forEach(e => {
+    const h = e.properties.height.getValue();
+    e.polygon.extrudedHeight = h;
+    e.polygon.height = 0;
+    e.polygon.material = buildingColour(h);
+    e.polygon.outline = true;
+    e.polygon.outlineColor = Cesium.Color.fromCssColorString("#0f1319").withAlpha(0.7);
+  });
+  await viewer.dataSources.add(src);
+  buildingSource = src;
+}
+
+/* ------------------------------------------------------------------ *
+ * Legend and stats
+ * ------------------------------------------------------------------ */
+function renderLegend() {
+  if (activeLayer === "shade") {
+    $("legtitle").textContent = "Direct sun";
+    $("legunits").textContent = `${day().label} at ${day().hours[hourIndex].hour}`;
+    $("legrows").innerHTML = [["#f5c451", "in direct sun"], ["#1b3a6b", "in shadow"]]
+      .map(([c, l]) => `<div class="row"><span class="sw" style="background:${c}"></span>${l}</div>`)
+      .join("");
+    return;
+  }
+  const L = activeLayer === "sunhours" ? day().sunhours : DATA.svf;
+  if (!L) return;
+  $("legtitle").textContent = L.title;
+  $("legunits").textContent = L.units;
+  $("legrows").innerHTML = L.legend.slice().reverse().map(e => {
+    const lab = activeLayer === "svf"
+      ? `${fmt(e.min, 2)} to ${fmt(e.max, 2)}`
+      : `${fmt(e.min, 1)} to ${fmt(e.max, 1)} h`;
+    return `<div class="row"><span class="sw" style="background:${e.color}"></span>${lab}</div>`;
+  }).join("");
+}
+
+function renderStats() {
+  const d = day(), s = d.stats;
+  let rows = [], note = "";
+  if (activeLayer === "shade") {
+    const h = d.hours[hourIndex];
+    rows = [
+      ["Street in sun now", pct(h.sunlit_fraction)],
+      ["Street in shadow now", pct(1 - h.sunlit_fraction)],
+      ["Sun height", fmt(h.altitude, 1) + "&deg;"],
+      ["Sun direction", fmt(h.azimuth, 0) + "&deg; from N"]
+    ];
+    note = "Share of open street that can see the sun at this exact moment.";
+  } else if (activeLayer === "sunhours") {
+    rows = [
+      ["Typical street sun", fmt(s.median_sun_hours, 1) + " h"],
+      ["Street with no sun at all", pct(s.frac_street_no_sun)],
+      ["Street under 2 hours", pct(s.frac_street_under_2h)],
+      ["Street over half the day", pct(s.frac_street_over_half_day)]
+    ];
+    note = "Out of " + d.daylight_hours_modelled + " daylight hours on " + d.label +
+           ". Typical street sun is the median across every open street cell.";
+  } else if (DATA.svf) {
+    const v = DATA.svf.stats;
+    rows = [
+      ["Typical sky visible", fmt(v.median, 2)],
+      ["Most enclosed spot", fmt(v.min, 2)],
+      ["Most open spot", fmt(v.max, 2)],
+      ["Open field would be", "1.00"]
+    ];
+    note = "Fraction of the sky hemisphere visible from street level. " +
+           "Lower means a deeper canyon.";
+  }
+  $("statshead").textContent = activeLayer === "svf" ? "Sky view" : d.label;
+  $("statstable").innerHTML = rows
+    .map(([k, v]) => `<tr><td class="k">${k}</td><td class="v">${v}</td></tr>`).join("");
+  $("statscope").innerHTML = note +
+    ` Rooftops and a ${DATA.site.edge_margin_m} m border are excluded throughout.`;
+}
+
+function renderRecBadge() {
+  const d = day();
+  if (activeLayer === "shade") {
+    $("recbadge").innerHTML =
+      `<b>${DATA.site.name}</b> &nbsp; ${d.label} &nbsp; <span>${d.hours[hourIndex].hour}</span>`;
+  } else if (activeLayer === "sunhours") {
+    $("recbadge").innerHTML =
+      `<b>${DATA.site.name}</b> &nbsp; hours of direct sun, ${d.label}`;
+  } else {
+    $("recbadge").innerHTML = `<b>${DATA.site.name}</b> &nbsp; sky view factor`;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Interaction
+ * ------------------------------------------------------------------ */
+function refresh() { drawOverlay(); renderLegend(); renderStats(); renderRecBadge(); }
+
+function setLayer(name) {
+  if (name === "svf" && !hasSvf()) return;
+  activeLayer = name;
+  document.querySelectorAll("#layerseg button").forEach(b =>
+    b.classList.toggle("on", b.dataset.layer === name));
+  const timeActive = name === "shade";
+  $("timesl").classList.toggle("off", !timeActive);
+  $("play").style.opacity = timeActive ? "1" : ".35";
+  $("play").style.pointerEvents = timeActive ? "auto" : "none";
+  if (!timeActive) stopPlay();
+  refresh();
+}
+
+function setDay(i) {
+  dayIndex = i;
+  document.querySelectorAll("#dayseg button").forEach((b, j) =>
+    b.classList.toggle("on", j === i));
+  const n = day().hours.length;
+  $("time").max = n - 1;
+  setHour(Math.min(hourIndex, n - 1));
+}
+
+function setHour(i) {
+  hourIndex = i;
+  const h = day().hours[i];
+  $("timeval").textContent = h.hour;
+  $("sunalt").textContent = "sun " + fmt(h.altitude, 1) + "\u00b0 up";
+  $("sunaz").textContent = fmt(h.azimuth, 0) + "\u00b0 from N";
+  $("time").value = i;
+  refresh();
+}
+
+function stopPlay() {
+  playing = false;
+  if (playTimer) { clearInterval(playTimer); playTimer = null; }
+  $("play").classList.remove("on");
+  $("play").textContent = "Play the day";
+}
+
+function togglePlay() {
+  if (playing) return stopPlay();
+  playing = true;
+  $("play").classList.add("on");
+  $("play").textContent = "Stop";
+  playTimer = setInterval(() => setHour((hourIndex + 1) % day().hours.length), 750);
+}
+
+function toggleRec() {
+  recMode = !recMode;
+  document.body.classList.toggle("rec", recMode);
+  $("trec").classList.toggle("on", recMode);
+  $("trec").textContent = recMode ? "Show the controls" : "Clean view for recording";
+}
+
+function homeView() {
+  const s = DATA.site;
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(
+      s.centre_lon, s.centre_lat - (s.span_m / 111320) * 0.85, s.span_m * 0.72),
+    orientation: {
+      heading: Cesium.Math.toRadians(4),
+      pitch: Cesium.Math.toRadians(-34)
+    },
+    duration: 1.5
+  });
+}
+
+function wireUp() {
+  $("dayseg").innerHTML = DATA.days
+    .map((d, i) => `<button data-day="${i}"${i === 0 ? ' class="on"' : ""}>${d.short}</button>`)
+    .join("");
+  document.querySelectorAll("#dayseg button").forEach(b =>
+    b.addEventListener("click", () => { stopPlay(); setDay(+b.dataset.day); }));
+
+  $("time").addEventListener("input", e => { stopPlay(); setHour(+e.target.value); });
+  $("play").addEventListener("click", togglePlay);
+  $("op").addEventListener("input", e => {
+    opacity = +e.target.value / 100;
+    $("opval").textContent = e.target.value + "%";
+    if (overlayLayer) overlayLayer.alpha = opacity;
+  });
+  document.querySelectorAll("#layerseg button").forEach(b => {
+    if (b.dataset.layer === "svf" && !hasSvf()) { b.style.display = "none"; return; }
+    b.addEventListener("click", () => setLayer(b.dataset.layer));
+  });
+  $("tbuild").addEventListener("click", () => {
+    if (!buildingSource) return;
+    const on = buildingSource.show = !buildingSource.show;
+    $("tbuild").classList.toggle("on", on);
+    $("tbuild").textContent = on ? "Buildings on" : "Buildings off";
+  });
+  $("thome").addEventListener("click", homeView);
+  $("trec").addEventListener("click", toggleRec);
+  $("closeabout").addEventListener("click", () => $("about").style.display = "none");
+  $("closepick").addEventListener("click", () => $("pick").style.display = "none");
+
+  document.addEventListener("keydown", e => {
+    if (e.key === "r" || e.key === "R") toggleRec();
+    if (e.key === " ") { e.preventDefault(); togglePlay(); }
+    if (e.key === "Escape") { $("about").style.display = "none"; $("pick").style.display = "none"; }
+    if (e.key === "ArrowRight") { stopPlay(); setHour(Math.min(hourIndex + 1, day().hours.length - 1)); }
+    if (e.key === "ArrowLeft") { stopPlay(); setHour(Math.max(hourIndex - 1, 0)); }
+  });
+
+  viewer.screenSpaceEventHandler.setInputAction(click => {
+    const picked = viewer.scene.pick(click.position);
+    if (!Cesium.defined(picked) || !picked.id || !picked.id.properties) {
+      $("pick").style.display = "none";
+      return;
+    }
+    const h = picked.id.properties.height.getValue();
+    const storeys = Math.max(1, Math.round(h / 3.4));
+    const alt = day().hours[hourIndex].altitude;
+    const shadow = h / Math.tan(alt * Math.PI / 180);
+    $("picktable").innerHTML =
+      `<tr><td>Height above street</td><td class="v">${fmt(h, 0)} m / ${fmt(h * 3.28084, 0)} ft</td></tr>` +
+      `<tr><td>Roughly</td><td class="v">${storeys} storeys</td></tr>` +
+      `<tr><td>Shadow at ${day().hours[hourIndex].hour}</td><td class="v">${fmt(shadow, 0)} m</td></tr>`;
+    $("picknote").textContent =
+      "Shadow length is this height projected onto flat ground at the current sun " +
+      "angle. The map also accounts for everything else in the way.";
+    $("pick").style.display = "block";
+  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+}
+
+/* ------------------------------------------------------------------ *
+ * Boot
+ * ------------------------------------------------------------------ */
+async function start() {
+  let src;
+  try { src = await loadCesium(); } catch (e) { return bootFail(); }
+
+  viewer = new Cesium.Viewer("cesiumContainer", {
+    baseLayer: Cesium.ImageryLayer.fromProviderAsync(
+      Promise.resolve(new Cesium.OpenStreetMapImageryProvider({
+        url: "https://tile.openstreetmap.org/"
+      }))),
+    animation: false, timeline: false, geocoder: false, homeButton: false,
+    sceneModePicker: false, baseLayerPicker: false, navigationHelpButton: false,
+    fullscreenButton: false, infoBox: false, selectionIndicator: false
+  });
+  viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#1d2129");
+  viewer.scene.globe.depthTestAgainstTerrain = true;
+  viewer.scene.fog.enabled = true;
+
+  renderCopy();
+  await addBuildings();
+  wireUp();
+  hourIndex = Math.floor(DATA.days[0].hours.length / 2);
+  setDay(0);
+  homeView();
+  $("boot").style.display = "none";
+  console.log("map library loaded from: " + src.name);
+}
+
+start().catch(e => {
+  $("boot").innerHTML = `<div class="inner">could not start the scene<br>
+    <span style="color:#5c646f;font-size:11px">${String(e)}</span></div>`;
+});
+</script>
+</body>
+</html>

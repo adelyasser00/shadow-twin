@@ -1,0 +1,9 @@
+# Normalise line endings so a Windows checkout and a Linux CI agree.
+* text=auto eol=lf
+
+# Never touch these.
+*.laz binary
+*.las binary
+*.tif binary
+*.png binary
+*.jpg binary

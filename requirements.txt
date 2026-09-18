@@ -1,0 +1,11 @@
+numpy>=1.24
+laspy>=2.5
+lazrs>=0.5
+pyproj>=3.4
+Pillow>=10.0
+rasterio>=1.3
+shapely>=2.0
+scipy>=1.10
+matplotlib>=3.7
+# GPU renders only, already present on Kaggle:
+# torch

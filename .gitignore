@@ -1,0 +1,27 @@
+# LiDAR tiles. Hundreds of megabytes each, and freely re-downloadable.
+data/
+*.laz
+*.las
+
+# Vendored Cesium. 23 MB of library the CDN serves faster.
+viewer/vendor/
+node_modules/
+package-lock.json
+package.json
+
+# Solver output. Regenerate with run_nyc, do not version it.
+viewer/data.json
+viewer/shadow-twin.html
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
