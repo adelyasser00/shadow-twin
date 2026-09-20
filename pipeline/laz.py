@@ -95,6 +95,80 @@ def _fill_holes(grid: np.ndarray, valid: np.ndarray, max_iter: int = 60):
     return grid[tuple(idx)]
 
 
+def _buildings_without_classes(heights, hits_total, hits_single, res_m, log):
+    """
+    Find buildings in a tile that was never classified.
+
+    NYC's 2017 delivery classifies ground and leaves nearly everything else as
+    class 1, so the ASPRS building code is not available.
+
+    The logic is subtractive, and the direction matters. In a dense city almost
+    everything tall is a building, so the job is to take everything above
+    street level and remove the vegetation, rather than to prove each cell is a
+    building. Proving it the other way round rejects real towers: Midtown roofs
+    carry water tanks, plant rooms and setbacks, and pulses grazing a tall
+    facade come back more than once. Both of those look like a tree to a strict
+    test, and the tallest buildings fail hardest.
+
+    Vegetation is identified by two properties together, not either alone:
+
+      Multiple returns. A pulse hitting a roof reflects once. A pulse hitting a
+      canopy passes through gaps and reflects several times.
+
+      Roughness. A roof is flat to within its parapet. A canopy varies by
+      metres over a few metres.
+
+    A cell has to look like vegetation on both counts before it is removed.
+    """
+    from scipy import ndimage
+
+    tall = heights > 3.0
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        single_frac = np.where(
+            hits_total > 0, hits_single / np.maximum(hits_total, 1), 1.0
+        )
+    have_returns = hits_total.sum() > 0
+
+    # Roughness over roughly a 7 m window: wider than a parapet, narrower than
+    # a building.
+    w = max(3, int(round(7.0 / res_m)) | 1)
+    mean = ndimage.uniform_filter(heights, size=w, mode="nearest")
+    mean_sq = ndimage.uniform_filter(heights * heights, size=w, mode="nearest")
+    rough = np.sqrt(np.clip(mean_sq - mean * mean, 0, None))
+
+    log("  no classification in this tile, removing vegetation from the tall mask")
+    log(f"    tall (>3 m)            {tall.mean()*100:5.1f}%")
+
+    if have_returns:
+        veg = (single_frac < 0.55) & (rough > 3.0)
+        log(f"    looks like vegetation  {(tall & veg).mean()*100:5.1f}%"
+            "   (multi-return AND rough)")
+    else:
+        veg = rough > 5.0
+        log(f"    looks like vegetation  {(tall & veg).mean()*100:5.1f}%"
+            "   (rough only, no return counts in file)")
+
+    built = tall & ~veg
+
+    # Close gaps left by chimneys and lift rooms, then drop specks smaller than
+    # a shed, which are vehicles, scaffolding and street furniture.
+    built = ndimage.binary_closing(built, structure=np.ones((3, 3)))
+    lab, nlab = ndimage.label(built)
+    if nlab:
+        sizes = ndimage.sum(np.ones_like(built, np.float32), lab, range(1, nlab + 1))
+        min_cells = max(4, int(round(60.0 / (res_m * res_m))))
+        keep = np.zeros(nlab + 1, dtype=bool)
+        keep[1:] = sizes >= min_cells
+        built = keep[lab]
+
+    log(f"    buildings after cleanup {built.mean()*100:5.1f}% of the grid")
+    if built.mean() < 0.15:
+        log("    warning: under 15% in a dense city looks too low. "
+            "Check the viewer against the basemap.")
+    return built
+
+
 def rasterise(
     paths,
     centre_lat: float,
@@ -154,6 +228,12 @@ def rasterise(
 
     dsm = np.full((n, n), -np.inf, dtype=np.float32)   # every return: what casts shadow
     bld = np.full((n, n), -np.inf, dtype=np.float32)   # class 6 only: what is a building
+    # Fallback discriminator for unclassified tiles. A laser pulse that hits a
+    # roof comes back once. A pulse that hits a tree punches through the canopy
+    # and comes back several times. Counting single-return pulses per cell
+    # separates hard surfaces from vegetation without any classification.
+    hits_total = np.zeros((n, n), dtype=np.int32)
+    hits_single = np.zeros((n, n), dtype=np.int32)
     dem = np.full((n, n), np.inf, dtype=np.float32)    # class 2 only: street level
     n_used = 0
     n_ground = 0
@@ -203,6 +283,14 @@ def rasterise(
                     scatter(dem, row[g], col[g], z[g].astype(np.float32), np.minimum)
                     n_ground += int(g.sum())
 
+                nret = getattr(pts, "number_of_returns", None)
+                if nret is not None:
+                    nr = np.asarray(nret)[clean]
+                    np.add.at(hits_total, (r, c), 1)
+                    one = nr <= 1
+                    if one.any():
+                        np.add.at(hits_single, (r[one], c[one]), 1)
+
                 b = clean & (cls == BUILDING_CLASS)
                 if b.any():
                     scatter(bld, row[b], col[b], z[b].astype(np.float32), np.maximum)
@@ -214,8 +302,9 @@ def rasterise(
         log(f"    {k:>3} {CLASS_NAMES.get(k, 'unknown'):<20} "
             f"{class_hist[k]:>12,}  {class_hist[k]/n_used*100:5.1f}%")
     if n_bld == 0:
-        log("  WARNING: no class 6 building points. Buildings will be inferred "
-            "from height, which will also catch trees.")
+        log("  no class 6 points in this tile. NYC's 2017 delivery classifies "
+            "ground and little else, so buildings are found from return count "
+            "and surface roughness instead.")
     if n_used == 0:
         raise SystemExit(
             f"No points from these tiles landed inside a {span_m:.0f} m square at "
@@ -273,9 +362,9 @@ def rasterise(
         built = np.isfinite(bld) & (heights > 2.0)
         log(f"building cells from ASPRS class 6: {built.mean()*100:.1f}% of the grid")
     else:
-        built = heights > 3.0
-        log(f"building cells from height threshold (no class 6 present): "
-            f"{built.mean()*100:.1f}%")
+        built = _buildings_without_classes(
+            heights, hits_total, hits_single, res_m, log
+        )
 
     log(f"surface {dsm_m.min():.1f} to {dsm_m.max():.1f} m above datum")
     log(f"tallest object {heights.max():.1f} m above street "

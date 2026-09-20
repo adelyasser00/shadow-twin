@@ -45,11 +45,34 @@ def from_mask(
     # city slid into the harbour.
     t = transform * Affine.scale(float(resample_factor), float(resample_factor))
 
-    labels, n = ndimage.label(built)
+    # Label by height band, not by the raw mask.
+    #
+    # In a dense city the building mask is one continuous carpet: a whole block
+    # of touching buildings is a single connected component. Labelling that
+    # directly gives a handful of enormous blobs, each reported at the median
+    # height of everything inside it, which is why a block containing a 300 m
+    # tower comes out as one 19 m slab. The giant polygons also tend to go
+    # invalid once simplified, which breaks the viewer.
+    #
+    # Splitting into height bands first separates a tower from the low-rise it
+    # is attached to, and the result reads as stepped massing, which is what
+    # the city actually looks like.
+    band_m = 8.0
+    bands = np.floor(np.where(built, heights, -1) / band_m).astype(np.int32)
+    labels = np.zeros(built.shape, dtype=np.int32)
+    next_label = 1
+    for b in np.unique(bands[built]):
+        lab_b, nb = ndimage.label(built & (bands == b))
+        if nb == 0:
+            continue
+        m = lab_b > 0
+        labels[m] = lab_b[m] + next_label - 1
+        next_label += nb
+    n = next_label - 1
     if n == 0:
         log("  no buildings found in the mask")
         return []
-    log(f"  {n} connected components")
+    log(f"  {n} parts after splitting into {band_m:.0f} m height bands")
 
     idx = np.arange(1, n + 1)
     med_h = ndimage.median(heights, labels, index=idx)
@@ -71,9 +94,7 @@ def from_mask(
 
     out = []
     simplify_m = max(1.0, abs(t.a) * 1.2)
-    for geom, val in features.shapes(
-        labels.astype(np.int32), mask=built, transform=t
-    ):
+    for geom, val in features.shapes(labels, mask=labels > 0, transform=t):
         lab = int(val)
         if lab not in ranked_set:
             continue
@@ -81,8 +102,24 @@ def from_mask(
         if poly.is_empty:
             continue
         poly = poly.simplify(simplify_m, preserve_topology=True)
-        if poly.is_empty or poly.geom_type != "Polygon":
+        # Simplification can fold a ring back on itself. An invalid polygon
+        # reaches the browser as a Cesium render error with no useful message,
+        # so repair it here where the cause is still visible. buffer(0) is the
+        # standard fix and it either returns a clean shape or nothing.
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        if poly.is_empty:
             continue
+        if poly.geom_type == "MultiPolygon":
+            poly = max(poly.geoms, key=lambda g: g.area)
+        if poly.geom_type != "Polygon" or not poly.is_valid:
+            continue
+        # A ring with hundreds of vertices is a blob, not a building, and it is
+        # what breaks the viewer. Cap it.
+        if len(poly.exterior.coords) > 300:
+            poly = poly.convex_hull
+            if poly.geom_type != "Polygon":
+                continue
         ring = list(poly.exterior.coords)
         if len(ring) < 4:
             continue

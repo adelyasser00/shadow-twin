@@ -243,6 +243,8 @@ function bootFail() {
       Could not load the map library</div>
     <div style="color:#8b94a0;font-size:11.5px;line-height:1.7">
       No internet, or the Cesium CDN is blocked from here.<br><br>
+      If you already vendored Cesium, this page must be served over http.<br>
+      Run <code>python serve.py</code> instead of opening the file directly.<br><br>
       To make this page work offline, once, with a connection:<br>
       <code>npm install cesium@1.145.0</code><br>
       then copy <code>node_modules/cesium/Build/Cesium</code><br>
@@ -255,6 +257,24 @@ function bootFail() {
  * State
  * ------------------------------------------------------------------ */
 const $ = id => document.getElementById(id);
+
+// Cesium throws objects that are not Error instances, and String() turns those
+// into "[object Object]", which tells you nothing. Dig out something readable.
+function describe(e) {
+  if (e == null) return "unknown error";
+  if (typeof e === "string") return e;
+  const parts = [];
+  if (e.name) parts.push(e.name);
+  if (e.message) parts.push(e.message);
+  if (!parts.length && e.toString && e.toString() !== "[object Object]") {
+    parts.push(e.toString());
+  }
+  if (!parts.length) {
+    try { parts.push(JSON.stringify(e).slice(0, 400)); } catch (_) {}
+  }
+  if (e.stack) parts.push("\n\n" + String(e.stack).split("\n").slice(0, 4).join("\n"));
+  return parts.join(": ") || "unknown error";
+}
 const fmt = (v, d = 2) => (v === null || v === undefined || Number.isNaN(v))
   ? "--" : Number(v).toFixed(d);
 const pct = v => (v * 100).toFixed(1) + "%";
@@ -387,13 +407,22 @@ async function drawOverlay() {
 /* ------------------------------------------------------------------ *
  * Buildings
  * ------------------------------------------------------------------ */
+function closeRing(ring) {
+  const a = ring[0], z = ring[ring.length - 1];
+  const closed = a[0] === z[0] && a[1] === z[1];
+  return closed ? ring : ring.concat([a]);
+}
+
 function buildingGeoJson() {
   return {
     type: "FeatureCollection",
     features: DATA.buildings.map((b, i) => ({
       type: "Feature", id: i,
       properties: { height: b.height },
-      geometry: { type: "Polygon", coordinates: [b.ring.concat([b.ring[0]])] }
+      // GeoJSON wants a closed ring, but the pipeline already closes them.
+      // Closing a second time leaves two identical points in a row and
+      // Cesium's tessellator throws on that, which kills the whole page.
+      geometry: { type: "Polygon", coordinates: [closeRing(b.ring)] }
     }))
   };
 }
@@ -406,7 +435,20 @@ function buildingColour(h) {
 
 async function addBuildings() {
   if (!DATA.buildings || !DATA.buildings.length) return;
-  const src = await Cesium.GeoJsonDataSource.load(buildingGeoJson(), { clampToGround: false });
+  // One bad polygon should cost you that polygon, not the whole scene.
+  let src;
+  try {
+    src = await Cesium.GeoJsonDataSource.load(buildingGeoJson(), { clampToGround: false });
+  } catch (e) {
+    console.error("buildings failed to load:", e);
+    $("boot").innerHTML = `<div class="inner">
+      <div style="color:#ffb4a0;margin-bottom:8px">Buildings failed to load</div>
+      <div style="color:#8b94a0;font-size:11.5px">${describe(e)}</div>
+      <div style="color:#5c646f;font-size:11px;margin-top:10px">
+        The rest of the scene still works. Reload with buildings off if needed.</div>
+    </div>`;
+    return;
+  }
   src.entities.values.forEach(e => {
     const h = e.properties.height.getValue();
     e.polygon.extrudedHeight = h;
@@ -656,8 +698,15 @@ async function start() {
 }
 
 start().catch(e => {
-  $("boot").innerHTML = `<div class="inner">could not start the scene<br>
-    <span style="color:#5c646f;font-size:11px">${String(e)}</span></div>`;
+  console.error("startup failed:", e);
+  $("boot").innerHTML = `<div class="inner">
+    <div style="color:#ffb4a0;font-size:14px;margin-bottom:10px">
+      Could not start the scene</div>
+    <div style="color:#c2cad4;font-size:11.5px;line-height:1.6;text-align:left">
+      ${describe(e)}</div>
+    <div style="color:#5c646f;font-size:11px;margin-top:12px">
+      Press F12 and open the Console tab for the full stack trace.</div>
+  </div>`;
 });
 </script>
 </body>
