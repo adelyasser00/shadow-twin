@@ -31,8 +31,22 @@ import glob
 
 import numpy as np
 
+# ASPRS standard classification codes, which is the whole reason to read the
+# point cloud rather than a derived raster. The tile already knows what is a
+# building and what is a tree; guessing from height alone turns every tree
+# canopy in Central Park into a skyscraper.
 GROUND_CLASS = 2
-NOISE_CLASSES = {7, 18}  # low noise and high noise
+BUILDING_CLASS = 6
+VEG_CLASSES = {3, 4, 5}   # low, medium and high vegetation
+WATER_CLASS = 9
+NOISE_CLASSES = {7, 18}   # low noise and high noise
+
+CLASS_NAMES = {
+    1: "unclassified", 2: "ground", 3: "low vegetation", 4: "medium vegetation",
+    5: "high vegetation", 6: "building", 7: "low noise", 9: "water",
+    10: "rail", 11: "road surface", 13: "wire guard", 14: "wire conductor",
+    15: "transmission tower", 17: "bridge deck", 18: "high noise",
+}
 
 
 def _crs_units(crs) -> str:
@@ -138,10 +152,13 @@ def rasterise(
     transform = from_origin(x0, y1, res_u, res_u)
     log(f"target grid {n} x {n} at {res_m} m ({res_u:.2f} CRS units)")
 
-    dsm = np.full((n, n), -np.inf, dtype=np.float32)
-    dem = np.full((n, n), np.inf, dtype=np.float32)
+    dsm = np.full((n, n), -np.inf, dtype=np.float32)   # every return: what casts shadow
+    bld = np.full((n, n), -np.inf, dtype=np.float32)   # class 6 only: what is a building
+    dem = np.full((n, n), np.inf, dtype=np.float32)    # class 2 only: street level
     n_used = 0
     n_ground = 0
+    n_bld = 0
+    class_hist = {}
 
     def scatter(grid, rows, cols, vals, op):
         """Vectorised per-cell min or max without the slow ufunc.at path."""
@@ -177,12 +194,28 @@ def rasterise(
                 scatter(dsm, r, c, zz, np.maximum)
                 n_used += int(clean.sum())
 
+                u, ct = np.unique(cls[clean], return_counts=True)
+                for k, v in zip(u.tolist(), ct.tolist()):
+                    class_hist[k] = class_hist.get(k, 0) + v
+
                 g = clean & (cls == GROUND_CLASS)
                 if g.any():
                     scatter(dem, row[g], col[g], z[g].astype(np.float32), np.minimum)
                     n_ground += int(g.sum())
 
-    log(f"{n_used:,} points gridded, {n_ground:,} of them ground class")
+                b = clean & (cls == BUILDING_CLASS)
+                if b.any():
+                    scatter(bld, row[b], col[b], z[b].astype(np.float32), np.maximum)
+                    n_bld += int(b.sum())
+
+    log(f"{n_used:,} points gridded")
+    log("  point classes present:")
+    for k in sorted(class_hist, key=lambda k: -class_hist[k])[:8]:
+        log(f"    {k:>3} {CLASS_NAMES.get(k, 'unknown'):<20} "
+            f"{class_hist[k]:>12,}  {class_hist[k]/n_used*100:5.1f}%")
+    if n_bld == 0:
+        log("  WARNING: no class 6 building points. Buildings will be inferred "
+            "from height, which will also catch trees.")
     if n_used == 0:
         raise SystemExit(
             f"No points from these tiles landed inside a {span_m:.0f} m square at "
@@ -190,6 +223,20 @@ def rasterise(
             "Either the tiles do not cover that point, or the centre is wrong. "
             "Check the tile footprint on the downloader map."
         )
+
+    # Outlier ceiling. A single bird return makes the tallest-object readout
+    # nonsense and, worse, casts a shadow across the whole frame. Anything far
+    # above the 99.99th percentile of the surface is not architecture.
+    finite = dsm[np.isfinite(dsm)]
+    if finite.size:
+        ceiling = np.percentile(finite, 99.99)
+        spread = ceiling - np.percentile(finite, 50)
+        limit = ceiling + max(20.0 / unit_m, 0.15 * spread)
+        n_out = int((dsm > limit).sum())
+        if n_out:
+            log(f"  rejected {n_out} cells above {limit*unit_m:.0f} m as outliers "
+                f"(birds, aircraft or multipath)")
+            dsm[dsm > limit] = -np.inf
 
     dsm_valid = np.isfinite(dsm)
     dem_valid = np.isfinite(dem)
@@ -219,7 +266,16 @@ def rasterise(
     west, south, east, north = transform_bounds(
         crs, "EPSG:4326", x0, y1 - n * res_u, x0 + n * res_u, y1, densify_pts=21
     )
-    built = heights > 3.0
+    # Buildings come from the classification, not from a height threshold.
+    # A height threshold cannot tell a plane tree from a brownstone, and in a
+    # tile that is mostly park that difference is the whole picture.
+    if n_bld > 0:
+        built = np.isfinite(bld) & (heights > 2.0)
+        log(f"building cells from ASPRS class 6: {built.mean()*100:.1f}% of the grid")
+    else:
+        built = heights > 3.0
+        log(f"building cells from height threshold (no class 6 present): "
+            f"{built.mean()*100:.1f}%")
 
     log(f"surface {dsm_m.min():.1f} to {dsm_m.max():.1f} m above datum")
     log(f"tallest object {heights.max():.1f} m above street "
