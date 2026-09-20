@@ -168,6 +168,12 @@
     <div class="slhead"><span>overlay opacity</span><span class="val" id="opval">100%</span></div>
     <input type="range" id="op" min="0" max="100" step="5" value="100">
   </div>
+  <div class="sec">Buildings</div>
+  <div class="dayseg" id="bmode"></div>
+  <div class="sl">
+    <div class="slhead"><span>building opacity</span><span class="val" id="bopval">97%</span></div>
+    <input type="range" id="bop" min="10" max="100" step="5" value="97">
+  </div>
   <button class="btn on" id="tbuild">Buildings on</button>
   <button class="btn" id="thome">Reset the camera</button>
   <button class="btn" id="trec">Clean view for recording</button>
@@ -285,6 +291,41 @@ let dayIndex = 0, hourIndex = 0;
 let opacity = 1.0;
 let playing = false, playTimer = null;
 let recMode = false;
+let buildMode = "sun";      // sun | gain | flat
+let buildOpacity = 0.97;
+
+const hasFacades = () => !!DATA.has_facades;
+
+// Buildings coloured by how much sun their own walls get. Cool where a wall
+// never leaves the shade, warm where it is lit most of the day. Deliberately
+// the same ramp as the ground sun-hours layer so the two read together.
+const WALL_RAMP = ["#10203f", "#1d3f6e", "#2e6a8e", "#49939a",
+                   "#84b78c", "#d3c96b", "#e99a4a", "#c9482f"];
+
+function rampColour(t) {
+  const i = Math.max(0, Math.min(WALL_RAMP.length - 1,
+    Math.floor(t * WALL_RAMP.length)));
+  return WALL_RAMP[i];
+}
+
+function buildingValue(b) {
+  if (!b.sun) return null;
+  const s = b.sun[day().id];
+  if (!s) return null;
+  return buildMode === "gain" ? s.kwh : s.h;
+}
+
+function buildingMax() {
+  if (buildMode === "gain") {
+    let m = 0;
+    for (const b of DATA.buildings) {
+      const v = buildingValue(b);
+      if (v !== null) m = Math.max(m, v);
+    }
+    return m || 1;
+  }
+  return day().facade_hours_max || day().hours.length;
+}
 
 const day = () => DATA.days[dayIndex];
 const hasSvf = () => DATA.svf !== null && DATA.svf !== undefined;
@@ -297,7 +338,7 @@ function renderCopy() {
   $("hdrtitle").textContent = s.name;
   $("hdrsub").textContent =
     `${s.span_m} m across at ${s.cellsize_m} m per cell \u00b7 ` +
-    `tallest object in frame ${s.tallest_m} m (${s.tallest_ft} ft)`;
+    `tallest object in frame ${s.tallest_m} m (${s.tallest_ft} ft) \u00b7 camera faces north`;
   $("hdrcav").textContent =
     "Direct sun and shade computed from LiDAR surface geometry. " +
     "No temperature, no wind, no cloud. This is a shadow model.";
@@ -418,7 +459,7 @@ function buildingGeoJson() {
     type: "FeatureCollection",
     features: DATA.buildings.map((b, i) => ({
       type: "Feature", id: i,
-      properties: { height: b.height },
+      properties: { height: b.height, idx: i },
       // GeoJSON wants a closed ring, but the pipeline already closes them.
       // Closing a second time leaves two identical points in a row and
       // Cesium's tessellator throws on that, which kills the whole page.
@@ -427,10 +468,28 @@ function buildingGeoJson() {
   };
 }
 
-function buildingColour(h) {
-  const t = Math.max(0, Math.min(1, (h - 15) / 240));
-  return Cesium.Color.fromCssColorString("#333b47")
-    .brighten(t * 0.42, new Cesium.Color()).withAlpha(0.97);
+function buildingColour(b) {
+  if (buildMode === "flat" || !hasFacades()) {
+    const t = Math.max(0, Math.min(1, (b.height - 15) / 240));
+    return Cesium.Color.fromCssColorString("#333b47")
+      .brighten(t * 0.42, new Cesium.Color()).withAlpha(buildOpacity);
+  }
+  const v = buildingValue(b);
+  if (v === null) {
+    return Cesium.Color.fromCssColorString("#333b47").withAlpha(buildOpacity);
+  }
+  const t = Math.max(0, Math.min(0.999, v / buildingMax()));
+  return Cesium.Color.fromCssColorString(rampColour(t)).withAlpha(buildOpacity);
+}
+
+function recolourBuildings() {
+  if (!buildingSource) return;
+  const ents = buildingSource.entities.values;
+  for (let i = 0; i < ents.length; i++) {
+    const e = ents[i];
+    const b = DATA.buildings[e.properties.idx.getValue()];
+    e.polygon.material = buildingColour(b);
+  }
 }
 
 async function addBuildings() {
@@ -450,12 +509,12 @@ async function addBuildings() {
     return;
   }
   src.entities.values.forEach(e => {
-    const h = e.properties.height.getValue();
-    e.polygon.extrudedHeight = h;
+    const b = DATA.buildings[e.properties.idx.getValue()];
+    e.polygon.extrudedHeight = b.height;
     e.polygon.height = 0;
-    e.polygon.material = buildingColour(h);
+    e.polygon.material = buildingColour(b);
     e.polygon.outline = true;
-    e.polygon.outlineColor = Cesium.Color.fromCssColorString("#0f1319").withAlpha(0.7);
+    e.polygon.outlineColor = Cesium.Color.fromCssColorString("#0f1319").withAlpha(0.55);
   });
   await viewer.dataSources.add(src);
   buildingSource = src;
@@ -464,13 +523,34 @@ async function addBuildings() {
 /* ------------------------------------------------------------------ *
  * Legend and stats
  * ------------------------------------------------------------------ */
+function renderBuildingLegend() {
+  if (!hasFacades() || buildMode === "flat") return "";
+  const max = buildingMax();
+  const unit = buildMode === "gain" ? " kWh/m2" : " h";
+  const rows = [];
+  for (let i = WALL_RAMP.length - 1; i >= 0; i--) {
+    const lo = (max * i / WALL_RAMP.length);
+    const hi = (max * (i + 1) / WALL_RAMP.length);
+    rows.push(`<div class="row"><span class="sw" style="background:${WALL_RAMP[i]}">`
+      + `</span>${lo.toFixed(1)} to ${hi.toFixed(1)}${unit}</div>`);
+  }
+  const title = buildMode === "gain"
+    ? "Wall solar gain" : "Sun on the walls";
+  const sub = buildMode === "gain"
+    ? "clear sky, per m2 of wall, " + day().label
+    : "hours of direct sun on the wall, " + day().label;
+  return `<div style="margin-top:9px;border-top:1px solid rgba(255,255,255,.1);
+    padding-top:7px"><div class="lt">${title}</div>
+    <div class="lu">${sub}</div>${rows.join("")}</div>`;
+}
+
 function renderLegend() {
   if (activeLayer === "shade") {
     $("legtitle").textContent = "Direct sun";
     $("legunits").textContent = `${day().label} at ${day().hours[hourIndex].hour}`;
     $("legrows").innerHTML = [["#f5c451", "in direct sun"], ["#1b3a6b", "in shadow"]]
       .map(([c, l]) => `<div class="row"><span class="sw" style="background:${c}"></span>${l}</div>`)
-      .join("");
+      .join("") + renderBuildingLegend();
     return;
   }
   const L = activeLayer === "sunhours" ? day().sunhours : DATA.svf;
@@ -482,7 +562,7 @@ function renderLegend() {
       ? `${fmt(e.min, 2)} to ${fmt(e.max, 2)}`
       : `${fmt(e.min, 1)} to ${fmt(e.max, 1)} h`;
     return `<div class="row"><span class="sw" style="background:${e.color}"></span>${lab}</div>`;
-  }).join("");
+  }).join("") + renderBuildingLegend();
 }
 
 function renderStats() {
@@ -562,6 +642,7 @@ function setDay(i) {
   const n = day().hours.length;
   $("time").max = n - 1;
   setHour(Math.min(hourIndex, n - 1));
+  recolourBuildings();
 }
 
 function setHour(i) {
@@ -602,7 +683,7 @@ function homeView() {
     destination: Cesium.Cartesian3.fromDegrees(
       s.centre_lon, s.centre_lat - (s.span_m / 111320) * 0.85, s.span_m * 0.72),
     orientation: {
-      heading: Cesium.Math.toRadians(4),
+      heading: Cesium.Math.toRadians(184),
       pitch: Cesium.Math.toRadians(-34)
     },
     duration: 1.5
@@ -633,6 +714,25 @@ function wireUp() {
     $("tbuild").classList.toggle("on", on);
     $("tbuild").textContent = on ? "Buildings on" : "Buildings off";
   });
+  const modes = hasFacades()
+    ? [["sun", "Wall sun"], ["gain", "Solar gain"], ["flat", "Plain"]]
+    : [["flat", "Plain"]];
+  if (!hasFacades()) buildMode = "flat";
+  $("bmode").innerHTML = modes
+    .map(([k, l]) => `<button data-bm="${k}"${k === buildMode ? ' class="on"' : ""}>${l}</button>`)
+    .join("");
+  document.querySelectorAll("#bmode button").forEach(bn =>
+    bn.addEventListener("click", () => {
+      buildMode = bn.dataset.bm;
+      document.querySelectorAll("#bmode button").forEach(o =>
+        o.classList.toggle("on", o.dataset.bm === buildMode));
+      recolourBuildings(); renderLegend();
+    }));
+  $("bop").addEventListener("input", e => {
+    buildOpacity = +e.target.value / 100;
+    $("bopval").textContent = e.target.value + "%";
+    recolourBuildings();
+  });
   $("thome").addEventListener("click", homeView);
   $("trec").addEventListener("click", toggleRec);
   $("closeabout").addEventListener("click", () => $("about").style.display = "none");
@@ -652,17 +752,32 @@ function wireUp() {
       $("pick").style.display = "none";
       return;
     }
-    const h = picked.id.properties.height.getValue();
-    const storeys = Math.max(1, Math.round(h / 3.4));
-    const alt = day().hours[hourIndex].altitude;
-    const shadow = h / Math.tan(alt * Math.PI / 180);
-    $("picktable").innerHTML =
-      `<tr><td>Height above street</td><td class="v">${fmt(h, 0)} m / ${fmt(h * 3.28084, 0)} ft</td></tr>` +
-      `<tr><td>Roughly</td><td class="v">${storeys} storeys</td></tr>` +
-      `<tr><td>Shadow at ${day().hours[hourIndex].hour}</td><td class="v">${fmt(shadow, 0)} m</td></tr>`;
-    $("picknote").textContent =
-      "Shadow length is this height projected onto flat ground at the current sun " +
-      "angle. The map also accounts for everything else in the way.";
+    const b = DATA.buildings[picked.id.properties.idx.getValue()];
+    const rows = [
+      [`Height above street`,
+       `${fmt(b.height, 0)} m / ${fmt(b.height * 3.28084, 0)} ft`],
+    ];
+    if (b.sun && b.sun[day().id]) {
+      const s = b.sun[day().id];
+      const maxh = day().facade_hours_max || day().hours.length;
+      rows.push([`Sun on its walls, ${day().short.toLowerCase()}`,
+                 `${fmt(s.h, 1)} of ${fmt(maxh, 0)} h`]);
+      rows.push([`Lower half of the wall`, `${fmt(s.lo, 1)} h`]);
+      rows.push([`Upper half of the wall`, `${fmt(s.hi, 1)} h`]);
+      rows.push([`Solar gain, clear sky`, `${fmt(s.kwh, 2)} kWh/m&sup2;`]);
+      const other = DATA.days.find(d => d.id !== day().id);
+      if (other && b.sun[other.id]) {
+        rows.push([`Same wall in ${other.short.toLowerCase()}`,
+                   `${fmt(b.sun[other.id].h, 1)} h`]);
+      }
+    }
+    $("picktable").innerHTML = rows
+      .map(([k, v]) => `<tr><td>${k}</td><td class="v">${v}</td></tr>`).join("");
+    $("picknote").innerHTML = b.sun
+      ? "Wall sun is averaged over sample points up the facade, testing both "
+        + "which way the wall faces and what stands in front of it. Solar gain "
+        + "is the direct beam on a clear day, an upper bound with no cloud."
+      : "Facade solving was skipped for this run.";
     $("pick").style.display = "block";
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 }
