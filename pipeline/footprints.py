@@ -26,6 +26,7 @@ def from_mask(
     min_area_m2: float = 60.0,
     min_height_m: float = 4.0,
     log=print,
+    return_labels: bool = False,
 ):
     """
     built            bool mask, True where there is a building
@@ -128,13 +129,15 @@ def from_mask(
         lons, lats = warp_transform(crs, "EPSG:4326", xs, ys)
         out.append(
             {
+                "id": lab,
                 "ring": [[round(a, 6), round(b, 6)] for a, b in zip(lons, lats)],
                 "height": round(float(med_h[lab - 1]), 1),
             }
         )
 
-    out.sort(key=lambda b: b["height"], reverse=True)
     if out:
-        log(f"  tallest footprint {out[0]['height']:.0f} m, "
+        log(f"  tallest footprint {max(b['height'] for b in out):.0f} m, "
             f"median {np.median([b['height'] for b in out]):.0f} m")
+    if return_labels:
+        return out, labels, n
     return out

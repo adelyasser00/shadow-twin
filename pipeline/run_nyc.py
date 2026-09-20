@@ -224,6 +224,10 @@ def main():
                     help="skip sky view factor, which is the slow part and is "
                          "not what this post is about")
     ap.add_argument("--max-buildings", type=int, default=2500)
+    ap.add_argument("--skip-facades", action="store_true",
+                    help="skip wall sun exposure, which is the slow part")
+    ap.add_argument("--facade-levels", type=int, default=4,
+                    help="sample points up each wall. 4 splits base from crown.")
     ap.add_argument("--gpu", action="store_true",
                     help="use the torch backend. Only worth it on Kaggle or Modal; "
                          "your laptop GPU does not have the memory for this.")
@@ -315,11 +319,59 @@ def main():
 
     log("vectorising footprints for the 3D view")
     from .footprints import from_mask
-    bundle["buildings"] = from_mask(
+    buildings, labels, n_labels = from_mask(
         prep["built"], prep["heights"], prep["transform"], prep["crs"],
         prep["resample_factor"], max_features=args.max_buildings, log=log,
+        return_labels=True,
     )
-    log(f"{len(bundle['buildings'])} footprints")
+    log(f"{len(buildings)} footprints")
+
+    if not args.skip_facades and buildings:
+        from . import facade
+        log("solving sun on building walls")
+        pts = facade.wall_samples(
+            prep["built"], prep["heights"], labels, prep["cellsize"],
+            levels=args.facade_levels, log=log,
+        )
+        if pts is not None:
+            for spec, res_day in solved:
+                h0, h1 = spec["hours"]
+                positions = local_day_positions(
+                    spec["date"], args.lat, args.lon, spec["utc_offset"],
+                    tuple(range(h0, h1 + 1)),
+                )
+                lit_pos = [p for p in positions if p.above_horizon]
+                lit_lab = [l for p, l in zip(
+                    positions, [f"{h:02d}:00" for h in range(h0, h1 + 1)]
+                ) if p.above_horizon]
+                log(f"  {spec['label']}:")
+                r = facade.solve(
+                    pts, prep["surface"], prep["ground"], prep["cellsize"],
+                    lit_pos, lit_lab, log=log,
+                )
+                rolled = facade.per_building(pts, r, n_labels)
+                key = spec["id"]
+                n_h = float(len(lit_pos))
+                for b in buildings:
+                    i = b["id"]
+                    b.setdefault("sun", {})[key] = {
+                        "h": round(float(rolled["all"]["sun_hours"][i]), 2),
+                        "lo": round(float(rolled["low"]["sun_hours"][i]), 2),
+                        "hi": round(float(rolled["high"]["sun_hours"][i]), 2),
+                        "kwh": round(float(rolled["all"]["gain_wh_m2"][i]) / 1000.0, 2),
+                    }
+                allh = [b["sun"][key]["h"] for b in buildings]
+                log(f"    wall sun hours across buildings: "
+                    f"min {min(allh):.1f}  median {float(np.median(allh)):.1f}  "
+                    f"max {max(allh):.1f}  (of {n_h:.0f} daylight hours)")
+                for d in bundle["days"]:
+                    if d["id"] == key:
+                        d["facade_hours_max"] = n_h
+
+    for b in buildings:
+        b.pop("id", None)
+    bundle["buildings"] = buildings
+    bundle["has_facades"] = bool(buildings and "sun" in buildings[0])
 
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     path = args.out or os.path.join(here, "viewer", "data.json")
