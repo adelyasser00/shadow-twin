@@ -94,6 +94,7 @@ def from_mask(
     ranked_set = set(ranked)
 
     out = []
+    dropped_blobs = [0]
     simplify_m = max(1.0, abs(t.a) * 1.2)
     for geom, val in features.shapes(labels, mask=labels > 0, transform=t):
         lab = int(val)
@@ -115,12 +116,14 @@ def from_mask(
             poly = max(poly.geoms, key=lambda g: g.area)
         if poly.geom_type != "Polygon" or not poly.is_valid:
             continue
-        # A ring with hundreds of vertices is a blob, not a building, and it is
-        # what breaks the viewer. Cap it.
+        # A ring with hundreds of vertices is a blob spanning several real
+        # buildings. Replacing it with its convex hull used to "fix" that, but
+        # a convex hull of a long thin sliver is a giant slab that does not
+        # exist anywhere in the city. Drop it instead. A missing building is an
+        # honest gap; an invented one is a lie that people will spot.
         if len(poly.exterior.coords) > 300:
-            poly = poly.convex_hull
-            if poly.geom_type != "Polygon":
-                continue
+            dropped_blobs[0] += 1
+            continue
         ring = list(poly.exterior.coords)
         if len(ring) < 4:
             continue
@@ -135,6 +138,9 @@ def from_mask(
             }
         )
 
+    if dropped_blobs[0]:
+        log(f"  dropped {dropped_blobs[0]} oversized blobs spanning several "
+            f"buildings rather than inventing a shape for them")
     if out:
         log(f"  tallest footprint {max(b['height'] for b in out):.0f} m, "
             f"median {np.median([b['height'] for b in out]):.0f} m")
