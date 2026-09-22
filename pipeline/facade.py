@@ -126,12 +126,33 @@ def wall_samples(built: np.ndarray, heights: np.ndarray, labels: np.ndarray,
 
 
 def solve(pts, surface: np.ndarray, ground: np.ndarray, cellsize: float,
-          positions, labels_hours, max_march_m: float = 1500.0, log=print):
+          positions, labels_hours, max_march_m: float = 1500.0, log=print,
+          labels_grid: np.ndarray | None = None):
     """
-    Sun hours and clear-sky solar gain for every wall sample point.
+    Direct sun hours and clear-sky solar gain for every wall sample point.
 
-    Returns a dict of arrays, one entry per sample point, plus the per-hour
-    lit mask so the viewer can animate the facades.
+    Self-shadowing, and why the march starts outside the wall
+    ---------------------------------------------------------
+    Manhattan's walls run at about 29 degrees to the raster grid, so on the grid
+    every wall is a staircase of cells. A ray marched toward the sun from a
+    staircase cell, in whole-cell steps, often lands on the next step of the same
+    wall and reports the building as shading itself. On an isolated tower with
+    nothing around it, that bug cut the sun on every sun-facing wall by roughly
+    half. The fix has three parts:
+
+      1. The ray starts one cell outside the wall, along its outward normal.
+      2. It moves in continuous steps along the true sun direction and is only
+         rounded to a cell when sampling, so it does not zig-zag.
+      3. Hits on the building's own cells within the first 6 m are ignored.
+         Beyond that they count, so a genuine L-shaped building still shades
+         its own inner corner.
+
+    verify_facade.py checks this on an isolated rotated tower, where every wall
+    that faces the sun must be lit for every hour it faces it.
+
+    Only the direct beam is modelled. Diffuse sky light and light reflected off
+    other buildings also reach a wall, including a north wall that never sees the
+    sun directly. Those are not zero in reality and this does not claim they are.
     """
     n_pts = pts["row"].size
     n_hours = len(positions)
@@ -139,58 +160,60 @@ def solve(pts, surface: np.ndarray, ground: np.ndarray, cellsize: float,
     gain = np.zeros(n_pts, dtype=np.float32)
 
     h, w = surface.shape
-    r0 = pts["row"]
-    c0 = pts["col"]
-    # Absolute height of each sample point above the vertical datum.
-    z0 = ground[r0, c0] + pts["z_above_ground"]
+    r0 = pts["row"].astype(np.float64)
+    c0 = pts["col"].astype(np.float64)
+    own = pts["label"]
+    z0 = ground[pts["row"], pts["col"]] + pts["z_above_ground"]
+    # One cell outward along the wall normal. East is +col, north is -row.
+    rs = r0 - pts["nn"] * 1.0
+    cs = c0 + pts["ne"] * 1.0
+    self_skip = max(2, int(round(6.0 / cellsize)))
 
     for k, p in enumerate(positions):
         if p.altitude <= 0.5:
             continue
         se, sn, su = sun_vector(p.altitude, p.azimuth)
-
-        # Orientation test. cos of the angle between the wall normal and the
-        # direction to the sun. Vertical wall, so only the horizontal parts of
-        # the sun vector project onto the normal.
         cos_aoi = pts["ne"] * se + pts["nn"] * sn
         faces = cos_aoi > 0.0
-
-        # Occlusion test, only for the points that face the sun at all.
         idx = np.nonzero(faces)[0]
         if idx.size == 0:
             continue
-        blocked = np.zeros(idx.size, dtype=bool)
-        tan_alt = math.tan(math.radians(p.altitude))
-        steps = int(min(max_march_m, 1500.0) / cellsize)
-        rr0, cc0, zz0 = r0[idx], c0[idx], z0[idx]
 
-        for n in range(1, steps + 1):
-            dcol = int(round(n * se / max(abs(se), abs(sn), 1e-9)))
-            drow = int(round(-n * sn / max(abs(se), abs(sn), 1e-9)))
-            dist = math.hypot(drow, dcol) * cellsize
-            if dist > max_march_m:
-                break
-            rr = rr0 + drow
-            cc = cc0 + dcol
-            inside = (rr >= 0) & (rr < h) & (cc >= 0) & (cc < w)
+        hz = math.hypot(se, sn)
+        de, dn = se / hz, sn / hz               # unit horizontal sun direction
+        tan_alt = math.tan(math.radians(p.altitude))
+        steps = int(max_march_m / cellsize)
+
+        blocked = np.zeros(idx.size, dtype=bool)
+        alive = np.ones(idx.size, dtype=bool)
+        rr0, cc0, zz0, oo = rs[idx], cs[idx], z0[idx], own[idx]
+
+        for n in range(0, steps + 1):
+            fr = rr0 - dn * n
+            fc = cc0 + de * n
+            rr = np.rint(fr).astype(np.int64)
+            cc = np.rint(fc).astype(np.int64)
+            inside = alive & (rr >= 0) & (rr < h) & (cc >= 0) & (cc < w)
             if not inside.any():
                 break
-            ray_z = zz0 + dist * tan_alt
-            hit = np.zeros(idx.size, dtype=bool)
-            hit[inside] = surface[rr[inside], cc[inside]] > ray_z[inside]
-            blocked |= hit
-            if blocked.all():
+            ray_z = zz0 + (n + 1.0) * cellsize * tan_alt
+            sel = np.nonzero(inside)[0]
+            hit = surface[rr[sel], cc[sel]] > ray_z[sel]
+            if labels_grid is not None and n < self_skip:
+                hit &= labels_grid[rr[sel], cc[sel]] != oo[sel]
+            blocked[sel[hit]] = True
+            alive &= ~blocked
+            # Points whose ray has climbed above everything can stop early.
+            alive[sel[ray_z[sel] > surface.max()]] = False
+            if not alive.any():
                 break
 
         visible = np.zeros(n_pts, dtype=bool)
         visible[idx[~blocked]] = True
         lit[k] = visible
-
         dni = clear_sky_dni(p.altitude)
         if dni > 0:
-            # Plane-of-array direct term for a vertical surface, one hour.
             gain[visible] += (dni * cos_aoi[visible]).astype(np.float32)
-
         if log:
             log(f"    {labels_hours[k]}  {visible.mean()*100:5.1f}% of wall "
                 f"samples in sun, DNI {dni:4.0f} W/m2")
@@ -199,29 +222,59 @@ def solve(pts, surface: np.ndarray, ground: np.ndarray, cellsize: float,
             "gain_wh_m2": gain}
 
 
+ORIENTS = [("N", 0.0), ("E", 90.0), ("S", 180.0), ("W", 270.0)]
+
+
 def per_building(pts, res, n_labels: int):
     """
     Roll wall samples up to one record per building part.
 
-    Reported separately for the lower and upper half of each wall, because in
-    a dense city that difference is the story: the crown is in sun all day
-    while the base never leaves the shade.
+    Averaging every wall of a building into one number is the mistake that
+    makes all of this useless. A building's north wall gets almost nothing and
+    its south wall gets everything; the mean of the two is a number that
+    describes no wall on the building and is roughly the same for every
+    building in the city. Every value below is therefore reported by compass
+    orientation, and by lower and upper half of the wall.
+
+    The headline number for colouring is the SOUTH-facing wall in winter and
+    the worst wall in summer, because those are the two questions people
+    actually ask: where does the heat get in, and where does it never arrive.
     """
     lab = pts["label"]
     frac = pts["height_frac"]
     sun = res["sun_hours"]
     gain = res["gain_wh_m2"]
 
-    out = {}
-    lower = frac < 0.5
-    upper = ~lower
-    for name, sel in (("all", np.ones_like(lower)), ("low", lower), ("high", upper)):
+    # Compass bearing each wall faces, from its outward normal.
+    bearing = (np.degrees(np.arctan2(pts["ne"], pts["nn"])) + 360.0) % 360.0
+
+    def roll(sel):
         s = np.zeros(n_labels + 1, dtype=np.float32)
         g = np.zeros(n_labels + 1, dtype=np.float32)
-        cnt = np.zeros(n_labels + 1, dtype=np.float32)
-        np.add.at(s, lab[sel], sun[sel])
-        np.add.at(g, lab[sel], gain[sel])
-        np.add.at(cnt, lab[sel], 1.0)
-        cnt[cnt == 0] = 1.0
-        out[name] = {"sun_hours": s / cnt, "gain_wh_m2": g / cnt}
+        c = np.zeros(n_labels + 1, dtype=np.float32)
+        if sel.any():
+            np.add.at(s, lab[sel], sun[sel])
+            np.add.at(g, lab[sel], gain[sel])
+            np.add.at(c, lab[sel], 1.0)
+        c[c == 0] = 1.0
+        return {"sun_hours": s / c, "gain_wh_m2": g / c}
+
+    out = {"all": roll(np.ones(lab.shape, dtype=bool)),
+           "low": roll(frac < 0.5),
+           "high": roll(frac >= 0.5)}
+
+    # Each wall belongs to the compass quarter it faces.
+    for name, centre in ORIENTS:
+        d = np.abs(((bearing - centre + 180.0) % 360.0) - 180.0)
+        out[name] = roll(d <= 45.0)
+
+    # The metric that actually separates buildings: how much energy the whole
+    # envelope takes on the sunniest side. A tall tower with open sky on its
+    # south face scores high; the same tower buried in a canyon does not.
+    best_gain = np.zeros(n_labels + 1, dtype=np.float32)
+    best_sun = np.zeros(n_labels + 1, dtype=np.float32)
+    for name, _ in ORIENTS:
+        np.maximum(best_gain, out[name]["gain_wh_m2"], out=best_gain)
+        np.maximum(best_sun, out[name]["sun_hours"], out=best_sun)
+    out["best"] = {"sun_hours": best_sun, "gain_wh_m2": best_gain}
     return out

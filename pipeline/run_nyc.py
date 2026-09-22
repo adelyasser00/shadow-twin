@@ -303,7 +303,7 @@ def main():
         if pts is not None:
             for spec, pos, lab in solved:
                 r = facade.solve(pts, prep["surface"], prep["ground"], cellsize,
-                                 pos, lab, log=None)
+                                 pos, lab, log=None, labels_grid=labels)
                 r["sun_hours"] = r["sun_hours"] * step_h
                 r["gain_wh_m2"] = r["gain_wh_m2"] * step_h
                 rolled = facade.per_building(pts, r, n_labels)

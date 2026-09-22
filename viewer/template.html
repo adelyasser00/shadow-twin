@@ -111,6 +111,15 @@
   #boot code{background:#161a20;padding:2px 6px;border-radius:4px;display:inline-block;
              margin:3px 0;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;
              color:#9ecbff}
+
+  #compass{top:10px;right:248px;width:118px;padding:8px 8px 6px;text-align:center}
+  #compass svg{width:100px;height:100px;display:block;margin:0 auto}
+  #compass .ctxt{font-size:10px;color:#a2abb7;margin-top:3px;line-height:1.35;
+                 font-variant-numeric:tabular-nums}
+  #compass .ctxt b{color:#f5c451;font-weight:600}
+  body.rec #compass{opacity:1;pointer-events:none}
+  @media (max-width:760px){ #compass{top:auto;bottom:62px;right:auto;left:8px;width:92px}
+    #compass svg{width:76px;height:76px} }
   .cesium-widget-credits{font-size:9px !important}
 
   @media (max-width:760px){
@@ -179,6 +188,24 @@
   <button class="btn" id="trec">Clean view for recording</button>
 </div>
 
+<div class="panel" id="compass">
+  <svg viewBox="-50 -50 100 100" aria-label="compass">
+    <circle r="44" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="1.5"/>
+    <g id="crose">
+      <line x1="0" y1="-44" x2="0" y2="-34" stroke="#ff6b57" stroke-width="3"/>
+      <line x1="44" y1="0" x2="36" y2="0" stroke="rgba(255,255,255,.45)" stroke-width="1.5"/>
+      <line x1="0" y1="44" x2="0" y2="36" stroke="rgba(255,255,255,.45)" stroke-width="1.5"/>
+      <line x1="-44" y1="0" x2="-36" y2="0" stroke="rgba(255,255,255,.45)" stroke-width="1.5"/>
+      <text x="0" y="-24" fill="#ff6b57" font-size="12" font-weight="700" text-anchor="middle" dominant-baseline="middle">N</text>
+      <text x="26" y="0" fill="#a2abb7" font-size="10" text-anchor="middle" dominant-baseline="middle">E</text>
+      <text x="0" y="26" fill="#a2abb7" font-size="10" text-anchor="middle" dominant-baseline="middle">S</text>
+      <text x="-26" y="0" fill="#a2abb7" font-size="10" text-anchor="middle" dominant-baseline="middle">W</text>
+    </g>
+    <polygon points="0,-9 6,6 0,2 -6,6" fill="#e6ebf1"/>
+    <g id="csun"><circle r="6.5" fill="#f5c451" stroke="#0d1014" stroke-width="1.5"/></g>
+  </svg>
+  <div class="ctxt" id="ctxt"></div>
+</div>
 <div class="panel" id="legend">
   <div class="lt" id="legtitle"></div>
   <div class="lu" id="legunits"></div>
@@ -660,7 +687,7 @@ function renderRecBadge() {
 /* ------------------------------------------------------------------ *
  * Interaction
  * ------------------------------------------------------------------ */
-function refresh() { drawOverlay(); renderLegend(); renderStats(); renderRecBadge(); }
+function refresh() { drawOverlay(); renderLegend(); renderStats(); renderRecBadge(); updateCompass(true); }
 
 function setLayer(name) {
   if (name === "svf" && !hasSvf()) return;
@@ -834,6 +861,72 @@ function wireUp() {
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 }
 
+
+/* ------------------------------------------------------------------ *
+ * Compass and sun.
+ *
+ * The rose turns with the camera, so the arrow in the middle is always
+ * "the way you are looking" and the red N is always true north. The sun
+ * marker sits on the rose at its real azimuth for the current frame, and a
+ * ray in the scene points at it, so you can see where the light is coming
+ * from without doing any geometry in your head.
+ * ------------------------------------------------------------------ */
+let _lastHeading = null, sunRay = null, sunDot = null;
+
+function currentSun() {
+  const h = day().hours[hourIndex];
+  return { alt: h.altitude, az: h.azimuth, label: h.hour };
+}
+
+function updateCompass(force) {
+  if (!viewer) return;
+  const heading = Cesium.Math.toDegrees(viewer.camera.heading);
+  if (!force && _lastHeading !== null && Math.abs(heading - _lastHeading) < 0.3) return;
+  _lastHeading = heading;
+  $("crose").setAttribute("transform", `rotate(${-heading})`);
+  const sun = currentSun();
+  const rel = Cesium.Math.toRadians(sun.az - heading);
+  // Higher sun sits closer to the centre, like a sky chart.
+  const r = 40 * Math.max(0.15, 1 - sun.alt / 90);
+  $("csun").setAttribute("transform", `translate(${r * Math.sin(rel)},${-r * Math.cos(rel)})`);
+  const dirs = ["N","NE","E","SE","S","SW","W","NW"];
+  const look = dirs[Math.round(((heading % 360) + 360) % 360 / 45) % 8];
+  $("ctxt").innerHTML = `looking ${look}<br><b>sun ${fmt(sun.alt, 0)}&deg; up</b>, ` +
+    `${fmt(sun.az, 0)}&deg;`;
+}
+
+function sunEnd() {
+  const s = DATA.site, sun = currentSun();
+  const L = s.span_m * 0.75;
+  const alt = Cesium.Math.toRadians(sun.alt), az = Cesium.Math.toRadians(sun.az);
+  const east = L * Math.cos(alt) * Math.sin(az);
+  const north = L * Math.cos(alt) * Math.cos(az);
+  const up = L * Math.sin(alt);
+  const lat = s.centre_lat + north / 111320;
+  const lon = s.centre_lon + east / (111320 * Math.cos(Cesium.Math.toRadians(s.centre_lat)));
+  return Cesium.Cartesian3.fromDegrees(lon, lat, up);
+}
+
+function addSun() {
+  const s = DATA.site;
+  const base = Cesium.Cartesian3.fromDegrees(s.centre_lon, s.centre_lat, 0);
+  sunRay = viewer.entities.add({
+    polyline: {
+      positions: new Cesium.CallbackProperty(() => [base, sunEnd()], false),
+      width: 6,
+      material: new Cesium.PolylineGlowMaterialProperty({
+        glowPower: 0.25, color: Cesium.Color.fromCssColorString("#f5c451").withAlpha(0.85)
+      })
+    }
+  });
+  sunDot = viewer.entities.add({
+    position: new Cesium.CallbackProperty(() => sunEnd(), false),
+    point: { pixelSize: 22, color: Cesium.Color.fromCssColorString("#ffd76a"),
+             outlineColor: Cesium.Color.fromCssColorString("#ff9d3a"), outlineWidth: 3,
+             disableDepthTestDistance: Number.POSITIVE_INFINITY }
+  });
+}
+
 /* ------------------------------------------------------------------ *
  * Boot
  * ------------------------------------------------------------------ */
@@ -857,6 +950,8 @@ async function start() {
   renderCopy();
   await addBuildings();
   wireUp();
+  addSun();
+  viewer.scene.postRender.addEventListener(() => updateCompass(false));
   hourIndex = Math.floor(DATA.days[0].hours.length / 2);
   setDay(0);
   homeView();
