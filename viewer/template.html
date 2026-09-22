@@ -157,7 +157,7 @@
   <div class="dayseg" id="dayseg"></div>
 
   <div class="sl" id="timesl">
-    <div class="slhead"><span>local clock</span><span class="val" id="timeval">--:--</span></div>
+    <div class="slhead"><span>EST, CEQR window</span><span class="val" id="timeval">--:--</span></div>
     <input type="range" id="time" min="0" max="0" step="1" value="0">
     <div class="sunline"><span id="sunalt">altitude</span><span id="sunaz">azimuth</span></div>
   </div>
@@ -349,7 +349,7 @@ function renderCopy() {
   $("hdrtitle").textContent = s.name;
   $("hdrsub").textContent =
     `${s.span_m} m across at ${s.cellsize_m} m per cell \u00b7 ` +
-    `tallest object in frame ${s.tallest_m} m (${s.tallest_ft} ft) \u00b7 camera faces north`;
+    `tallest object in frame ${s.tallest_m} m (${s.tallest_ft} ft) \u00b7 looking up the avenues`;
   $("hdrcav").textContent =
     "Direct sun and shade computed from LiDAR surface geometry. " +
     "No temperature, no wind, no cloud. This is a shadow model.";
@@ -382,6 +382,26 @@ function renderCopy() {
     <p>${m.surface_source}.</p>
     <p>Native resolution ${m.native_resolution_m} m, ${m.resample}. Street level
     from ${m.ground_source}.</p>
+
+    <div class="k">Method</div>
+    <p>${m.time_basis}. This is the method New York City requires for shadow
+    assessment in environmental review. CEQR regulates shadow on parks and other
+    sunlight-sensitive open space, not on streets or buildings; street and wall
+    figures here are reported because they matter for heat, not because CEQR
+    asks for them.</p>
+    ${m.scenario && m.scenario.type === "height cap" ? `<p class="warn"><b>Scenario
+      run.</b> Every building capped at ${m.scenario.cap_m} m
+      (${m.scenario.buildings_capped} buildings). Compare with the
+      existing-condition run.</p>` : ""}
+    ${m.scenario && m.scenario.type === "today" ? `<p class="warn"><b>Today's
+      skyline.</b> The 2017 LiDAR surface was raised to current roof heights from
+      NYC Building Footprints wherever a building is taller now, which adds towers
+      finished after the survey. Footprint heights are single roof values, so
+      spires and setbacks are simplified.</p>` : ""}
+    <p>Buildings: ${m.building_source}. The LiDAR surface was captured in May
+    2017; anything built since appears as a building but is missing from the
+    shadow surface. ${s.nodata_frac > 0 ? `${(s.nodata_frac*100).toFixed(0)}% of
+    the frame lies outside the LiDAR tiles and is blanked, not guessed.` : ""}</p>
 
     <div class="k">How the sun is placed</div>
     <p>${m.solar_algorithm}, checked against solstice and equinox geometry that
@@ -595,8 +615,8 @@ function renderStats() {
       ["Street under 2 hours", pct(s.frac_street_under_2h)],
       ["Street over half the day", pct(s.frac_street_over_half_day)]
     ];
-    note = "Out of " + d.daylight_hours_modelled + " daylight hours on " + d.label +
-           ". Typical street sun is the median across every open street cell.";
+    note = "Inside the CEQR window of " + fmt(d.daylight_hours_modelled, 1) +
+           " h on " + d.label + ", EST. Medians across every open cell.";
   } else if (DATA.svf) {
     const v = DATA.svf.stats;
     rows = [
@@ -607,6 +627,15 @@ function renderStats() {
     ];
     note = "Fraction of the sky hemisphere visible from street level. " +
            "Lower means a deeper canyon.";
+  }
+  if (s.resource && activeLayer !== "svf") {
+    const r = s.resource;
+    const park = activeLayer === "shade"
+      ? [[`${r.name} in sun now`, pct(d.hours[hourIndex].resource_sunlit || 0)]]
+      : [[`${r.name}, typical sun`, fmt(r.median_sun_hours, 1) + " h"],
+         [`${r.name} never in sun`, pct(r.frac_no_sun)],
+         [`${r.name} under 2 h`, pct(r.frac_under_2h)]];
+    rows = park.concat(rows);
   }
   $("statshead").textContent = activeLayer === "svf" ? "Sky view" : d.label;
   $("statstable").innerHTML = rows
@@ -690,14 +719,19 @@ function toggleRec() {
 }
 
 function homeView() {
+  // Manhattan's street grid runs about 29 degrees east of true north, so the
+  // camera looks straight up the avenues from behind the site. Heading and the
+  // offset direction must agree: the camera sits opposite the way it looks.
   const s = DATA.site;
+  const heading = 29;
+  const back = s.span_m * 0.95;                 // metres behind the centre
+  const h = Cesium.Math.toRadians(heading);
+  const dN = -back * Math.cos(h), dE = -back * Math.sin(h);
+  const lat = s.centre_lat + dN / 111320;
+  const lon = s.centre_lon + dE / (111320 * Math.cos(Cesium.Math.toRadians(s.centre_lat)));
   viewer.camera.flyTo({
-    destination: Cesium.Cartesian3.fromDegrees(
-      s.centre_lon, s.centre_lat - (s.span_m / 111320) * 0.85, s.span_m * 0.72),
-    orientation: {
-      heading: Cesium.Math.toRadians(184),
-      pitch: Cesium.Math.toRadians(-34)
-    },
+    destination: Cesium.Cartesian3.fromDegrees(lon, lat, s.span_m * 0.62),
+    orientation: { heading: h, pitch: Cesium.Math.toRadians(-33), roll: 0 },
     duration: 1.5
   });
 }

@@ -331,18 +331,30 @@ def rasterise(
     dem_valid = np.isfinite(dem)
     cover = dsm_valid.mean()
     log(f"surface coverage {cover*100:.1f}% of cells got a return")
-    if cover < 0.55:
-        log("  warning: large gaps. You are probably missing neighbouring tiles.")
-    if dem_valid.mean() < 0.05:
-        log("  warning: almost no ground-classified points. Falling back to a "
-            "block-minimum estimate of street level.")
 
-    dsm = np.where(dsm_valid, dsm, np.nan)
-    dsm = _fill_holes(np.nan_to_num(dsm, nan=0.0), dsm_valid)
+    # NYC tiles are squares rotated to the Manhattan street grid, so a north-up
+    # frame always has corners with no LiDAR at all. Filling those from the
+    # nearest measured cell used to extend real buildings outward as fake walls
+    # that then cast fake shadows. Small gaps (dark roofs, water, occlusion) are
+    # still filled; anything more than 6 m from a measurement is marked no-data,
+    # set to street level so it blocks nothing, and blanked in every output.
+    from scipy import ndimage
+    dist_cells = ndimage.distance_transform_edt(~dsm_valid)
+    nodata = dist_cells * res_m > 6.0
+    if nodata.any():
+        log(f"  {nodata.mean()*100:.1f}% of the frame has no LiDAR (outside the "
+            f"tiles). Marked no-data, not filled.")
+    if dem_valid.mean() >= 0.05:
+        ground_level = float(np.median(dem[dem_valid]))
+    else:
+        ground_level = float(np.percentile(dsm[dsm_valid], 5))
+    dsm = _fill_holes(np.where(dsm_valid, dsm, 0.0), dsm_valid)
+    dsm[nodata] = ground_level
 
     if dem_valid.mean() >= 0.05:
         dem = _fill_holes(np.where(dem_valid, dem, 0.0), dem_valid)
-        ground_source = "lowest ASPRS class 2 ground return per cell, gaps filled from nearest neighbour"
+        dem[nodata] = ground_level
+        ground_source = "lowest ASPRS class 2 ground return per cell, small gaps filled from nearest neighbour"
     else:
         from .nyc import estimate_ground
         dem = estimate_ground(dsm * unit_m, res_m) / unit_m
@@ -385,6 +397,7 @@ def rasterise(
         "ground_source": ground_source,
         "n_tiles": len(paths),
         "coverage": float(cover),
+        "nodata": nodata,
         "source_desc": (
             f"NYC 2017 airborne LiDAR point cloud, {len(paths)} tile(s), "
             f"{n_used:,} returns gridded to {res_m} m by highest return per cell"
