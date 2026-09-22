@@ -223,6 +223,10 @@ def main():
     ap.add_argument("--skip-svf", action="store_true",
                     help="skip sky view factor, which is the slow part and is "
                          "not what this post is about")
+    ap.add_argument("--footprints", default=None,
+                    help="NYC Building Footprints GeoJSON. When given, buildings "
+                         "come from the city's surveyed outlines instead of being "
+                         "guessed from the point cloud. Strongly recommended.")
     ap.add_argument("--max-buildings", type=int, default=2500)
     ap.add_argument("--skip-facades", action="store_true",
                     help="skip wall sun exposure, which is the slow part")
@@ -319,11 +323,25 @@ def main():
 
     log("vectorising footprints for the 3D view")
     from .footprints import from_mask
-    buildings, labels, n_labels = from_mask(
-        prep["built"], prep["heights"], prep["transform"], prep["crs"],
-        prep["resample_factor"], max_features=args.max_buildings, log=log,
-        return_labels=True,
-    )
+    if args.footprints:
+        from . import nyc_footprints
+        from rasterio.transform import Affine
+        log("reading NYC Building Footprints")
+        t = prep["transform"] * Affine.scale(float(prep["resample_factor"]))
+        buildings, labels, n_labels, fp_h, fp_built = nyc_footprints.load(
+            args.footprints, prep["bounds"], prep["crs"], t,
+            prep["surface"].shape, log=log,
+        )
+        prep["heights"] = fp_h
+        prep["built"] = fp_built
+        bundle["model"]["building_source"] = (
+            "NYC Building Footprints, NYC OTI, surveyed outlines and roof heights")
+    else:
+        buildings, labels, n_labels = from_mask(
+            prep["built"], prep["heights"], prep["transform"], prep["crs"],
+            prep["resample_factor"], max_features=args.max_buildings, log=log,
+            return_labels=True,
+        )
     log(f"{len(buildings)} footprints")
 
     if not args.skip_facades and buildings:
@@ -354,16 +372,26 @@ def main():
                 n_h = float(len(lit_pos))
                 for b in buildings:
                     i = b["id"]
-                    b.setdefault("sun", {})[key] = {
-                        "h": round(float(rolled["all"]["sun_hours"][i]), 2),
+                    rec = {
+                        "h": round(float(rolled["best"]["sun_hours"][i]), 2),
                         "lo": round(float(rolled["low"]["sun_hours"][i]), 2),
                         "hi": round(float(rolled["high"]["sun_hours"][i]), 2),
-                        "kwh": round(float(rolled["all"]["gain_wh_m2"][i]) / 1000.0, 2),
+                        "kwh": round(float(rolled["best"]["gain_wh_m2"][i]) / 1000.0, 3),
                     }
+                    for o, _ in facade.ORIENTS:
+                        rec[o] = [
+                            round(float(rolled[o]["sun_hours"][i]), 1),
+                            round(float(rolled[o]["gain_wh_m2"][i]) / 1000.0, 2),
+                        ]
+                    b.setdefault("sun", {})[key] = rec
                 allh = [b["sun"][key]["h"] for b in buildings]
-                log(f"    wall sun hours across buildings: "
-                    f"min {min(allh):.1f}  median {float(np.median(allh)):.1f}  "
-                    f"max {max(allh):.1f}  (of {n_h:.0f} daylight hours)")
+                log(f"    sunniest wall, hours: min {min(allh):.1f}  "
+                    f"median {float(np.median(allh)):.1f}  max {max(allh):.1f}  "
+                    f"(of {n_h:.0f} daylight hours)")
+                for o, _ in facade.ORIENTS:
+                    v = [b["sun"][key][o][0] for b in buildings]
+                    log(f"      {o} walls: median {float(np.median(v)):.1f} h, "
+                        f"max {max(v):.1f} h")
                 for d in bundle["days"]:
                     if d["id"] == key:
                         d["facade_hours_max"] = n_h

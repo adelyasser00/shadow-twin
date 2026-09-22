@@ -171,8 +171,8 @@
   <div class="sec">Buildings</div>
   <div class="dayseg" id="bmode"></div>
   <div class="sl">
-    <div class="slhead"><span>building opacity</span><span class="val" id="bopval">97%</span></div>
-    <input type="range" id="bop" min="10" max="100" step="5" value="97">
+    <div class="slhead"><span>building opacity</span><span class="val" id="bopval">100%</span></div>
+    <input type="range" id="bop" min="10" max="100" step="5" value="100">
   </div>
   <button class="btn on" id="tbuild">Buildings on</button>
   <button class="btn" id="thome">Reset the camera</button>
@@ -292,7 +292,7 @@ let opacity = 1.0;
 let playing = false, playTimer = null;
 let recMode = false;
 let buildMode = "sun";      // sun | gain | flat
-let buildOpacity = 0.97;
+let buildOpacity = 1.0;
 
 const hasFacades = () => !!DATA.has_facades;
 
@@ -315,16 +315,27 @@ function buildingValue(b) {
   return buildMode === "gain" ? s.kwh : s.h;
 }
 
+// Colour domain from the data, not from the theoretical maximum.
+//
+// In a dense city almost every wall is blocked almost all the time, so the
+// distribution is squashed against zero with a long thin tail. Scaling the
+// ramp to the single sunniest wall in the frame puts every other building in
+// the bottom bin and the whole city renders navy. Clipping at the 95th
+// percentile spreads the colours across the range that actually exists, and
+// the legend says what the top bin means so nothing is hidden.
+const _domCache = {};
 function buildingMax() {
-  if (buildMode === "gain") {
-    let m = 0;
-    for (const b of DATA.buildings) {
-      const v = buildingValue(b);
-      if (v !== null) m = Math.max(m, v);
-    }
-    return m || 1;
+  const key = buildMode + ":" + day().id;
+  if (_domCache[key] !== undefined) return _domCache[key];
+  const vals = [];
+  for (const b of DATA.buildings) {
+    const v = buildingValue(b);
+    if (v !== null && v > 0) vals.push(v);
   }
-  return day().facade_hours_max || day().hours.length;
+  if (!vals.length) return _domCache[key] = 1;
+  vals.sort((a, b) => a - b);
+  const p95 = vals[Math.min(vals.length - 1, Math.floor(vals.length * 0.95))];
+  return _domCache[key] = (p95 > 0 ? p95 : vals[vals.length - 1]) || 1;
 }
 
 const day = () => DATA.days[dayIndex];
@@ -535,10 +546,10 @@ function renderBuildingLegend() {
       + `</span>${lo.toFixed(1)} to ${hi.toFixed(1)}${unit}</div>`);
   }
   const title = buildMode === "gain"
-    ? "Wall solar gain" : "Sun on the walls";
+    ? "Sunniest wall, solar gain" : "Sunniest wall, sun hours";
   const sub = buildMode === "gain"
-    ? "clear sky, per m2 of wall, " + day().label
-    : "hours of direct sun on the wall, " + day().label;
+    ? "clear sky, per m2, " + day().label + " \u00b7 top bin is 95th pct and above"
+    : "on the building's best-facing wall, " + day().label;
   return `<div style="margin-top:9px;border-top:1px solid rgba(255,255,255,.1);
     padding-top:7px"><div class="lt">${title}</div>
     <div class="lu">${sub}</div>${rows.join("")}</div>`;
@@ -642,6 +653,7 @@ function setDay(i) {
   const n = day().hours.length;
   $("time").max = n - 1;
   setHour(Math.min(hourIndex, n - 1));
+  for (const k in _domCache) delete _domCache[k];
   recolourBuildings();
 }
 
@@ -760,23 +772,29 @@ function wireUp() {
     if (b.sun && b.sun[day().id]) {
       const s = b.sun[day().id];
       const maxh = day().facade_hours_max || day().hours.length;
-      rows.push([`Sun on its walls, ${day().short.toLowerCase()}`,
-                 `${fmt(s.h, 1)} of ${fmt(maxh, 0)} h`]);
-      rows.push([`Lower half of the wall`, `${fmt(s.lo, 1)} h`]);
-      rows.push([`Upper half of the wall`, `${fmt(s.hi, 1)} h`]);
-      rows.push([`Solar gain, clear sky`, `${fmt(s.kwh, 2)} kWh/m&sup2;`]);
       const other = DATA.days.find(d => d.id !== day().id);
-      if (other && b.sun[other.id]) {
-        rows.push([`Same wall in ${other.short.toLowerCase()}`,
-                   `${fmt(b.sun[other.id].h, 1)} h`]);
+      const os = other && b.sun[other.id];
+      rows.push([`&nbsp;`, `<span style="color:#79828f;font-weight:400">` +
+                 `${day().short} &nbsp; ${other ? other.short : ""}</span>`]);
+      for (const o of ["N", "E", "S", "W"]) {
+        if (!s[o]) continue;
+        const a = s[o][0], bb = os ? os[o][0] : null;
+        rows.push([`${o} facing wall`,
+          `${fmt(a, 1)} h &nbsp; <span style="color:#79828f">` +
+          `${bb === null ? "" : fmt(bb, 1) + " h"}</span>`]);
       }
+      rows.push([`Sunniest wall`, `${fmt(s.h, 1)} of ${fmt(maxh, 0)} h`]);
+      rows.push([`Base of that wall`, `${fmt(s.lo, 1)} h`]);
+      rows.push([`Crown of that wall`, `${fmt(s.hi, 1)} h`]);
+      rows.push([`Solar gain on it`, `${fmt(s.kwh, 2)} kWh/m&sup2;`]);
     }
     $("picktable").innerHTML = rows
       .map(([k, v]) => `<tr><td>${k}</td><td class="v">${v}</td></tr>`).join("");
     $("picknote").innerHTML = b.sun
-      ? "Wall sun is averaged over sample points up the facade, testing both "
-        + "which way the wall faces and what stands in front of it. Solar gain "
-        + "is the direct beam on a clear day, an upper bound with no cloud."
+      ? "Each wall is tested for which way it faces and what stands in front "
+        + "of it, hour by hour. Base and crown are the lower and upper half of "
+        + "the sunniest wall. Solar gain is the direct beam under a clear sky, "
+        + "an upper bound with no cloud."
       : "Facade solving was skipped for this run.";
     $("pick").style.display = "block";
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
