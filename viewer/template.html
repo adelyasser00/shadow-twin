@@ -112,10 +112,10 @@
   #split.on{display:block}
   #split-line{position:absolute;top:0;bottom:0;left:50%;width:3px;
               background:rgba(255,255,255,.35);cursor:ew-resize;pointer-events:all;z-index:10}
-  #split-label-l,#split-label-r{position:absolute;top:12px;font-size:11px;font-weight:600;
+  .slabel{position:absolute;top:12px;font-size:11px;font-weight:600;
     color:#e6ebf1;background:rgba(16,18,22,.82);padding:4px 9px;border-radius:6px;
     pointer-events:none;letter-spacing:.03em}
-  #split-label-l{left:12px} #split-label-r{right:12px}
+  #sll{left:12px} #slr{right:12px}
   #cesiumContainer2{position:absolute;top:0;bottom:0;right:0;left:50%;display:none}
   #cesiumContainer2.on{display:block}
   body.rec .panel,body.rec #viewbar{opacity:0;pointer-events:none}
@@ -166,8 +166,8 @@
 <div id="cesiumContainer2"></div>
 <div id="split">
   <div id="split-line"></div>
-  <div id="split-label-l" id="sll"></div>
-  <div id="split-label-r" id="slr"></div>
+  <div id="sll" class="slabel"></div>
+  <div id="slr" class="slabel"></div>
 </div>
 <div id="boot"><div class="inner">loading the scene<br>
 <span style="color:#5c646f;font-size:11px">first load pulls the map library and tiles</span></div></div>
@@ -983,13 +983,12 @@ function addSun() {
  * Boot
  * ------------------------------------------------------------------ */
 async function start() {
-  // We use OpenStreetMap tiles and our own raster overlays. We do not use
-  // Cesium Ion for anything, so suppress the default token request, which
-  // would otherwise fire and fail with an "access denied" message.
-  Cesium.Ion.defaultAccessToken = "";
 
   let src;
   try { src = await loadCesium(); } catch (e) { return bootFail(); }
+  // Only OpenStreetMap tiles and our own overlays are used, never Cesium Ion.
+  // This must run after the library has loaded, not before.
+  Cesium.Ion.defaultAccessToken = "";
 
   viewer = new Cesium.Viewer("cesiumContainer", {
     baseLayer: Cesium.ImageryLayer.fromProviderAsync(
