@@ -18,7 +18,7 @@ instead of by someone else.
 
 **1. Open the downloader.**
 
-`https://finder.nyc.gov/orthoimagery` — the NYC Imagery and LiDAR Downloader.
+`https://finder.nyc.gov/orthoimagery`, the NYC Imagery and LiDAR Downloader.
 
 **2. Search a coordinate.**
 
