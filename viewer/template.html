@@ -1142,7 +1142,7 @@ async function startSplit() {
   $("tsplit").classList.add("on");
   $("tsplit").textContent = "Exit comparison";
   $("split").classList.add("on");
-  $("cesiumContainer").style.right = "50%";
+  $("cesiumContainer").style.width = "50%";
   $("cesiumContainer2").classList.add("on");
 
   // Labels follow the data actually in each pane. The left pane is always
@@ -1192,7 +1192,7 @@ async function startSplit() {
     splitX = Math.max(0.15, Math.min(0.85, e.clientX / window.innerWidth));
     const pct = (splitX * 100).toFixed(1) + "%";
     line.style.left = pct;
-    $("cesiumContainer").style.right = (100 - splitX * 100).toFixed(1) + "%";
+    $("cesiumContainer").style.width = pct;
     $("cesiumContainer2").style.left = pct;
   };
 }
@@ -1202,6 +1202,15 @@ let src2 = null, overlay2 = null, removeSync = null;
 function syncCamera() {
   if (!viewer2) return;
   const c = viewer.camera;
+  // Same vertical field of view on both sides. Cesium's fov is horizontal for
+  // a wide viewer, so two panes of different width would show different
+  // scales at the same camera position. Matching the vertical angle keeps one
+  // metre the same size on screen in both panes, even with the divider moved.
+  const fovy = c.frustum.fovy;
+  const cv = viewer2.canvas;
+  const a2 = cv.clientWidth / Math.max(1, cv.clientHeight);
+  const fov2 = a2 >= 1 ? 2 * Math.atan(Math.tan(fovy / 2) * a2) : fovy;
+  if (Math.abs(viewer2.camera.frustum.fov - fov2) > 1e-6) viewer2.camera.frustum.fov = fov2;
   viewer2.camera.setView({
     destination: Cesium.Cartesian3.clone(c.positionWC),
     orientation: { heading: c.heading, pitch: c.pitch, roll: c.roll }
@@ -1241,7 +1250,7 @@ function stopSplit() {
   $("tsplit").classList.remove("on");
   $("tsplit").textContent = "Compare 2017 vs today";
   $("split").classList.remove("on");
-  $("cesiumContainer").style.right = "";
+  $("cesiumContainer").style.width = "";
   $("cesiumContainer2").classList.remove("on");
   $("cesiumContainer2").style.left = "";
   $("split-line").style.left = "";
