@@ -39,9 +39,3 @@ the output sound stronger is not a contribution.
 This computes shadow geometry. It does not compute temperature, wind, or thermal
 comfort, and a pull request that implies otherwise in the UI copy will be asked
 to change the copy, not the claim.
-
-## Credit
-
-Contributors are listed in `AUTHORS.md`. If you are joining a piece of work
-rather than sending a one-off fix, agree what you own and how you are credited
-before the first commit, not after.

@@ -25,3 +25,9 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Internal working notes
+CLAUDE.md
+AUTHORS.md
+tools/CLAUDE_CODE.md
+deploy/
