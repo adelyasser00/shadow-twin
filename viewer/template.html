@@ -142,6 +142,43 @@
   body.rec #compass{opacity:1;pointer-events:none}
   @media (max-width:760px){ #compass{top:auto;bottom:62px;right:auto;left:8px;width:92px}
     #compass svg{width:76px;height:76px} }
+
+  /* ---------- phones ----------
+     The map is the product, so on a small screen every panel starts hidden
+     behind a bottom bar and opens as a sheet over the lower part of the view.
+     Only the title and the layer switch stay on screen. */
+  #mobbar{display:none}
+  @media (max-width:760px), (max-height:500px){
+    #mobbar{display:flex;position:absolute;left:8px;right:8px;bottom:8px;z-index:7;gap:6px}
+    #mobbar button{flex:1;border:0;border-radius:9px;padding:10px 6px;font-size:12px;
+      font-weight:600;background:rgba(16,18,22,.93);color:#c8d0da;
+      border:1px solid rgba(255,255,255,.08)}
+    #mobbar button.on{background:#2f6fed;color:#fff}
+    #viewbar{bottom:56px !important;left:50% !important;right:auto !important;
+      transform:translateX(-50%) !important}
+    #ctrl,#legend,#stats{display:none}
+    body.m-ctrl #ctrl, body.m-info #legend, body.m-info #stats{
+      display:block;position:absolute;left:8px !important;right:8px !important;
+      top:auto !important;width:auto !important;max-width:none !important;
+      max-height:calc(100vh - 170px);overflow-y:auto;z-index:8}
+    body.m-ctrl #ctrl{bottom:104px !important}
+    body.m-info #stats{bottom:104px !important;max-height:36vh}
+    body.m-info #legend{bottom:104px !important}
+    #hdr{top:8px;left:8px;right:auto;max-width:62vw;padding:7px 9px}
+    #hdr .sub{display:none} #hdr .cav{display:none}
+    #compass{top:8px !important;right:8px !important;left:auto !important;
+      bottom:auto !important;width:78px;padding:5px}
+    #compass svg{width:64px;height:64px}
+    #compass .ctxt{font-size:9px}
+    #pick{top:auto !important;bottom:104px !important;left:8px !important;
+      right:8px !important;transform:none !important;max-width:none}
+    body.rec #mobbar{opacity:0;pointer-events:none}
+  }
+  @media (max-height:500px) and (min-width:560px){
+    body.m-info #legend{left:8px !important;right:auto !important;width:44vw !important}
+    body.m-info #stats{left:auto !important;right:8px !important;width:44vw !important}
+    #hdr{max-width:44vw}
+  }
   .cesium-widget-credits{font-size:9px !important}
 
   @media (max-width:760px){
@@ -253,6 +290,11 @@
   <div class="note" id="picknote"></div>
 </div>
 
+<div id="mobbar">
+  <button id="mbctrl">Controls</button>
+  <button id="mbinfo">Legend and stats</button>
+  <button id="mbabout">About</button>
+</div>
 <div id="viewbar">
   <div class="seg" id="layerseg">
     <button data-layer="shade" class="on">Shade now</button>
@@ -425,7 +467,8 @@ function renderCopy() {
     "Direct sun and shade computed from LiDAR surface geometry. " +
     "No temperature, no wind, no cloud. This is a shadow model.";
   $("hdrby").innerHTML =
-    `built by <b>Adel</b> &middot; <a id="openabout">how it works and what it is not</a>`;
+    `built by <b>Adel</b> &middot; <a id="openabout">how it works and what it is not</a>`
+    + ` &middot; <a href="https://github.com/adelyasser00/shadow-twin" target="_blank" rel="noopener">source</a>`;
   $("openabout").addEventListener("click", () => $("about").style.display = "block");
 
   if (DATA.mode === "FIXTURE") {
@@ -592,6 +635,7 @@ function recolourBuildings() {
     const b = DATA.buildings[e.properties.idx.getValue()];
     e.polygon.material = buildingColour(b);
   }
+  refreshSplit();
 }
 
 async function addBuildings() {
@@ -731,7 +775,25 @@ function renderRecBadge() {
 /* ------------------------------------------------------------------ *
  * Interaction
  * ------------------------------------------------------------------ */
-function refresh() { drawOverlay(); renderLegend(); renderStats(); renderRecBadge(); updateCompass(true); }
+// On a portrait phone the legend sits directly on top of the stats sheet. Its
+// height changes with the layer, so it is measured rather than guessed; a fixed
+// offset left a big empty gap between the two.
+function placeInfo() {
+  const lg = $("legend");
+  const stacked = document.body.classList.contains("m-info") &&
+                  window.innerWidth < 560;
+  if (!stacked) {
+    lg.style.removeProperty("bottom"); lg.style.removeProperty("max-height");
+    return;
+  }
+  const h = $("stats").offsetHeight;
+  const bottom = 104 + h + 8;
+  lg.style.setProperty("bottom", bottom + "px", "important");
+  lg.style.setProperty("max-height",
+    Math.max(90, window.innerHeight - bottom - 64) + "px", "important");
+}
+
+function refresh() { drawOverlay(); renderLegend(); renderStats(); renderRecBadge(); updateCompass(true); requestAnimationFrame(placeInfo); refreshSplit(); }
 
 function setLayer(name) {
   if (name === "svf" && !hasSvf()) return;
@@ -820,6 +882,7 @@ function wireUp() {
     opacity = +e.target.value / 100;
     $("opval").textContent = e.target.value + "%";
     if (overlayLayer) overlayLayer.alpha = opacity;
+    if (overlay2) overlay2.alpha = opacity;
   });
   document.querySelectorAll("#layerseg button").forEach(b => {
     if (b.dataset.layer === "svf" && !hasSvf()) { b.style.display = "none"; return; }
@@ -830,6 +893,7 @@ function wireUp() {
     const on = buildingSource.show = !buildingSource.show;
     $("tbuild").classList.toggle("on", on);
     $("tbuild").textContent = on ? "Buildings on" : "Buildings off";
+    if (src2) src2.show = on;
   });
   const modes = hasFacades()
     ? [["sun", "Wall sun"], ["gain", "Solar gain"], ["flat", "Plain"]]
@@ -851,6 +915,21 @@ function wireUp() {
     recolourBuildings();
   });
   $("thome").addEventListener("click", homeView);
+  const sheet = which => {
+    const on = !document.body.classList.contains(which);
+    document.body.classList.remove("m-ctrl", "m-info");
+    if (on) document.body.classList.add(which);
+    $("mbctrl").classList.toggle("on", document.body.classList.contains("m-ctrl"));
+    $("mbinfo").classList.toggle("on", document.body.classList.contains("m-info"));
+    requestAnimationFrame(placeInfo);
+  };
+  $("mbctrl").addEventListener("click", () => sheet("m-ctrl"));
+  window.addEventListener("resize", placeInfo);
+  $("mbinfo").addEventListener("click", () => sheet("m-info"));
+  $("mbabout").addEventListener("click", () => {
+    document.body.classList.remove("m-ctrl", "m-info");
+    $("about").style.display = "block";
+  });
   $("tsplit").addEventListener("click", () => {
     if (!hasBothModes()) {
       $("tsplit").textContent = "No comparison file";
@@ -1028,16 +1107,32 @@ async function start() {
 async function loadComparison() {
   const isTodayBuild = DATA.model && DATA.model.scenario &&
                        DATA.model.scenario.type === "today";
-  const url = isTodayBuild ? "2017.html" : "index.html";
+  // Deployed names first, then the local build names, so it works both on
+  // Cloudflare and under serve.py. Over file:// every fetch is refused, which
+  // is why comparison needs a server.
+  const urls = isTodayBuild ? ["2017.html", "shadow-twin-2017.html"]
+                            : ["index.html", "shadow-twin-today.html"];
   try {
-    const text = await fetch(url).then(r => r.ok ? r.text() : null);
+    let text = null;
+    for (const u of urls) {
+      try {
+        const r = await fetch(u);
+        if (r.ok) { text = await r.text(); if (text.includes("const DATA = ")) break; }
+      } catch (_) {}
+      text = null;
+    }
     if (!text) return;
+    // The data sits on one line. Read to the end of that line and trim, which
+    // works whether the file was built with Unix or Windows line endings.
+    // Looking for ";\n" failed on every Windows build, because there the
+    // line ends in ";\r\n".
     const start = text.indexOf("const DATA = ");
     if (start < 0) return;
-    const after2 = text.slice(start + 13);
-    const end2 = after2.indexOf(";\n");
-    if (end2 < 0) return;
-    try { DATA2 = JSON.parse(after2.slice(0, end2)); } catch(_) { return; }
+    const rest = text.slice(start + 13);
+    const nl = rest.indexOf("\n");
+    let js = (nl < 0 ? rest : rest.slice(0, nl)).trim();
+    if (js.endsWith(";")) js = js.slice(0, -1);
+    try { DATA2 = JSON.parse(js); } catch (_) { return; }
   } catch (_) { /* comparison file not present, that is fine */ }
 }
 
@@ -1050,79 +1145,95 @@ async function startSplit() {
   $("cesiumContainer").style.right = "50%";
   $("cesiumContainer2").classList.add("on");
 
-  // Labels
-  const isTodayBuild = DATA.model && DATA.model.scenario &&
-                       DATA.model.scenario.type === "today";
-  document.getElementById("sll").textContent = isTodayBuild ? "2017 survey" : "Today";
-  document.getElementById("slr").textContent = isTodayBuild ? "Today" : "2017 survey";
+  // Labels follow the data actually in each pane. The left pane is always
+  // the page you opened; the right pane is the other build.
+  const isToday = DATA.model && DATA.model.scenario && DATA.model.scenario.type === "today";
+  $("sll").textContent = isToday ? "Today" : "2017 survey";
+  $("slr").textContent = isToday ? "2017 survey" : "Today";
 
-  Cesium.Ion.defaultAccessToken = "";
   viewer2 = new Cesium.Viewer("cesiumContainer2", {
     baseLayer: Cesium.ImageryLayer.fromProviderAsync(
       Promise.resolve(new Cesium.OpenStreetMapImageryProvider({
-        url: "https://tile.openstreetmap.org/"
-      }))),
+        url: "https://tile.openstreetmap.org/" }))),
     animation:false, timeline:false, geocoder:false, homeButton:false,
     sceneModePicker:false, baseLayerPicker:false, navigationHelpButton:false,
     fullscreenButton:false, infoBox:false, selectionIndicator:false
   });
   viewer2.scene.globe.baseColor = Cesium.Color.fromCssColorString("#1d2129");
   viewer2.scene.globe.depthTestAgainstTerrain = true;
+  viewer2.scene.fog.enabled = true;
+  // One camera drives both panes. The right pane ignores mouse input, so the
+  // two can never drift apart; you steer from the left.
+  viewer2.scene.screenSpaceCameraController.enableInputs = false;
 
-  // Mirror buildings from DATA2
-  const bdata2 = DATA2;
-  const gj2 = { type:"FeatureCollection", features: bdata2.buildings.map((b,i) => ({
-    type:"Feature", id:i, properties:{height:b.height, idx:i},
-    geometry:{type:"Polygon", coordinates:[closeRing(b.ring)]}
-  }))};
-  const src2 = await Cesium.GeoJsonDataSource.load(gj2, {clampToGround:false});
+  const gj2 = { type: "FeatureCollection", features: DATA2.buildings.map((bd, i) => ({
+    type: "Feature", id: i, properties: { height: bd.height, idx: i },
+    geometry: { type: "Polygon", coordinates: [closeRing(bd.ring)] } })) };
+  src2 = await Cesium.GeoJsonDataSource.load(gj2, { clampToGround: false });
   src2.entities.values.forEach(e => {
-    const h = e.properties.height.getValue();
-    e.polygon.extrudedHeight = h;
+    const bd = DATA2.buildings[e.properties.idx.getValue()];
+    e.polygon.extrudedHeight = bd.height;
     e.polygon.height = 0;
-    e.polygon.material = buildingColour({height:h});
     e.polygon.outline = true;
     e.polygon.outlineColor = Cesium.Color.fromCssColorString("#0f1319").withAlpha(0.55);
   });
   await viewer2.dataSources.add(src2);
+  src2.show = buildingSource ? buildingSource.show : true;
 
-  // Draw the Dec 21 shadow overlay from DATA2
-  const decDay = bdata2.days.find(d => d.id === "dec");
-  if (decDay) {
-    const mid = Math.floor(decDay.hours.length / 2);
-    const frame = decDay.hours[mid];
-    const bs = bdata2.site.bounds;
-    const rect = Cesium.Rectangle.fromDegrees(bs.west, bs.south, bs.east, bs.north);
-    const prov = Cesium.SingleTileImageryProvider.fromUrl
-      ? await Cesium.SingleTileImageryProvider.fromUrl(frame.png, {rectangle:rect})
-      : new Cesium.SingleTileImageryProvider({url:frame.png, rectangle:rect});
-    const lyr = viewer2.imageryLayers.addImageryProvider(prov);
-    lyr.magnificationFilter = Cesium.TextureMagnificationFilter.NEAREST;
-  }
+  syncCamera();
+  removeSync = viewer.scene.postRender.addEventListener(syncCamera);
+  await refreshSplit();
 
-  // Sync cameras
-  viewer.camera.changed.addEventListener(() => {
-    if (!viewer2) return;
-    viewer2.camera.setView({
-      destination: viewer.camera.position,
-      orientation: { heading: viewer.camera.heading,
-                     pitch: viewer.camera.pitch, roll: viewer.camera.roll }
-    });
-  });
-
-  // Draggable split line
   const line = $("split-line");
-  line.addEventListener("pointerdown", e => { dragging=true; line.setPointerCapture(e.pointerId); });
-  line.addEventListener("pointermove", e => {
+  line.onpointerdown = e => { dragging = true; line.setPointerCapture(e.pointerId); };
+  line.onpointerup = () => { dragging = false; };
+  line.onpointermove = e => {
     if (!dragging) return;
-    const t = e.clientX / window.innerWidth;
-    splitX = Math.max(0.15, Math.min(0.85, t));
+    splitX = Math.max(0.15, Math.min(0.85, e.clientX / window.innerWidth));
     const pct = (splitX * 100).toFixed(1) + "%";
     line.style.left = pct;
-    $("cesiumContainer").style.right = (100 - splitX*100).toFixed(1)+"%";
+    $("cesiumContainer").style.right = (100 - splitX * 100).toFixed(1) + "%";
     $("cesiumContainer2").style.left = pct;
+  };
+}
+
+let src2 = null, overlay2 = null, removeSync = null;
+
+function syncCamera() {
+  if (!viewer2) return;
+  const c = viewer.camera;
+  viewer2.camera.setView({
+    destination: Cesium.Cartesian3.clone(c.positionWC),
+    orientation: { heading: c.heading, pitch: c.pitch, roll: c.roll }
   });
-  line.addEventListener("pointerup", () => { dragging=false; });
+}
+
+// Mirror whatever the controls show on the left: same day, same hour, same
+// layer, same building colouring, same opacities. Both panes share one colour
+// domain, so a colour means the same number on each side.
+async function refreshSplit() {
+  if (!viewer2 || !DATA2) return;
+  const d2 = DATA2.days.find(x => x.id === day().id) || DATA2.days[0];
+  let url;
+  if (activeLayer === "shade") url = d2.hours[Math.min(hourIndex, d2.hours.length - 1)].png;
+  else if (activeLayer === "sunhours") url = d2.sunhours.png;
+  else url = DATA2.svf ? DATA2.svf.png : d2.sunhours.png;
+  const bs = DATA2.site.bounds;
+  const rect = Cesium.Rectangle.fromDegrees(bs.west, bs.south, bs.east, bs.north);
+  const prov = Cesium.SingleTileImageryProvider.fromUrl
+    ? await Cesium.SingleTileImageryProvider.fromUrl(url, { rectangle: rect })
+    : new Cesium.SingleTileImageryProvider({ url, rectangle: rect });
+  const next = viewer2.imageryLayers.addImageryProvider(prov);
+  next.alpha = opacity;
+  next.magnificationFilter = Cesium.TextureMagnificationFilter.NEAREST;
+  if (overlay2) viewer2.imageryLayers.remove(overlay2, true);
+  overlay2 = next;
+  if (src2) {
+    src2.show = buildingSource ? buildingSource.show : true;
+    src2.entities.values.forEach(e => {
+      e.polygon.material = buildingColour(DATA2.buildings[e.properties.idx.getValue()]);
+    });
+  }
 }
 
 function stopSplit() {
@@ -1132,7 +1243,11 @@ function stopSplit() {
   $("split").classList.remove("on");
   $("cesiumContainer").style.right = "";
   $("cesiumContainer2").classList.remove("on");
+  $("cesiumContainer2").style.left = "";
+  $("split-line").style.left = "";
+  if (removeSync) { removeSync(); removeSync = null; }
   if (viewer2) { viewer2.destroy(); viewer2 = null; }
+  src2 = null; overlay2 = null;
 }
 
 start().catch(e => {
