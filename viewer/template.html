@@ -108,6 +108,16 @@
   #pick td.v{text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:#9ecbff}
   #pick .note{color:#79828f;font-size:9.5px;padding-top:6px;line-height:1.5}
 
+  #split{display:none;position:absolute;inset:0;pointer-events:none;z-index:2}
+  #split.on{display:block}
+  #split-line{position:absolute;top:0;bottom:0;left:50%;width:3px;
+              background:rgba(255,255,255,.35);cursor:ew-resize;pointer-events:all;z-index:10}
+  #split-label-l,#split-label-r{position:absolute;top:12px;font-size:11px;font-weight:600;
+    color:#e6ebf1;background:rgba(16,18,22,.82);padding:4px 9px;border-radius:6px;
+    pointer-events:none;letter-spacing:.03em}
+  #split-label-l{left:12px} #split-label-r{right:12px}
+  #cesiumContainer2{position:absolute;top:0;bottom:0;right:0;left:50%;display:none}
+  #cesiumContainer2.on{display:block}
   body.rec .panel,body.rec #viewbar{opacity:0;pointer-events:none}
   body.rec #recbadge{opacity:1}
   #recbadge{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);
@@ -153,6 +163,12 @@
 </head>
 <body>
 <div id="cesiumContainer"></div>
+<div id="cesiumContainer2"></div>
+<div id="split">
+  <div id="split-line"></div>
+  <div id="split-label-l" id="sll"></div>
+  <div id="split-label-r" id="slr"></div>
+</div>
 <div id="boot"><div class="inner">loading the scene<br>
 <span style="color:#5c646f;font-size:11px">first load pulls the map library and tiles</span></div></div>
 
@@ -197,6 +213,7 @@
   </div>
   <button class="btn on" id="tbuild">Buildings on</button>
   <button class="btn" id="thome">Reset the camera</button>
+  <button class="btn" id="tsplit">Compare 2017 vs today</button>
   <button class="btn" id="trec">Clean view for recording</button>
 </div>
 
@@ -330,6 +347,21 @@ let dayIndex = 0, hourIndex = 0;
 let opacity = 1.0;
 let playing = false, playTimer = null;
 let recMode = false;
+let splitMode = false;
+let viewer2 = null;
+let splitX = 0.5;
+let dragging = false;
+
+const LEFT_DAY = "dec";   // always 2017 on the left
+const RIGHT_DAY = "dec";  // always today on the right in comparison
+
+function hasBothModes() {
+  return DATA2 !== null;
+}
+
+// DATA2 is the comparison dataset. The viewer tries to load it from
+// a relative URL; if it is not present, split mode is silently disabled.
+let DATA2 = null;
 let buildMode = "sun";      // sun | gain | flat
 let buildOpacity = 1.0;
 
@@ -393,7 +425,7 @@ function renderCopy() {
     "Direct sun and shade computed from LiDAR surface geometry. " +
     "No temperature, no wind, no cloud. This is a shadow model.";
   $("hdrby").innerHTML =
-    `built by <b>Adel</b> &middot; <a id="openabout">how it works and what it is not</a> &middot; <a href="https://github.com/adelyasser00/shadow-twin" target="_blank" rel="noopener" style="color:#7aa7f0;text-decoration:none">source</a>`;
+    `built by <b>Adel</b> &middot; <a id="openabout">how it works and what it is not</a>`;
   $("openabout").addEventListener("click", () => $("about").style.display = "block");
 
   if (DATA.mode === "FIXTURE") {
@@ -819,6 +851,14 @@ function wireUp() {
     recolourBuildings();
   });
   $("thome").addEventListener("click", homeView);
+  $("tsplit").addEventListener("click", () => {
+    if (!hasBothModes()) {
+      $("tsplit").textContent = "No comparison file";
+      $("tsplit").disabled = true;
+      return;
+    }
+    splitMode ? stopSplit() : startSplit();
+  });
   $("trec").addEventListener("click", toggleRec);
   $("closeabout").addEventListener("click", () => $("about").style.display = "none");
   $("closepick").addEventListener("click", () => $("pick").style.display = "none");
@@ -943,6 +983,11 @@ function addSun() {
  * Boot
  * ------------------------------------------------------------------ */
 async function start() {
+  // We use OpenStreetMap tiles and our own raster overlays. We do not use
+  // Cesium Ion for anything, so suppress the default token request, which
+  // would otherwise fire and fail with an "access denied" message.
+  Cesium.Ion.defaultAccessToken = "";
+
   let src;
   try { src = await loadCesium(); } catch (e) { return bootFail(); }
 
@@ -958,6 +1003,11 @@ async function start() {
   viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#1d2129");
   viewer.scene.globe.depthTestAgainstTerrain = true;
   viewer.scene.fog.enabled = true;
+  await loadComparison();
+  if (!DATA2) {
+    $("tsplit").style.opacity = ".4";
+    $("tsplit").title = "Open the today or 2017 build via serve.py to enable comparison";
+  }
 
   renderCopy();
   await addBuildings();
@@ -969,6 +1019,121 @@ async function start() {
   homeView();
   $("boot").style.display = "none";
   console.log("map library loaded from: " + src.name);
+}
+
+// Load the comparison dataset if it exists.
+// The "today" build is always index.html; the 2017 build is 2017.html.
+// When viewing the today build, try to load 2017 data.
+// When viewing the 2017 build, try to load today data.
+// Fail silently either way.
+async function loadComparison() {
+  const isTodayBuild = DATA.model && DATA.model.scenario &&
+                       DATA.model.scenario.type === "today";
+  const url = isTodayBuild ? "2017.html" : "index.html";
+  try {
+    const text = await fetch(url).then(r => r.ok ? r.text() : null);
+    if (!text) return;
+    const start = text.indexOf("const DATA = ");
+    if (start < 0) return;
+    const after2 = text.slice(start + 13);
+    const end2 = after2.indexOf(";\n");
+    if (end2 < 0) return;
+    try { DATA2 = JSON.parse(after2.slice(0, end2)); } catch(_) { return; }
+  } catch (_) { /* comparison file not present, that is fine */ }
+}
+
+async function startSplit() {
+  if (!DATA2) return;
+  splitMode = true;
+  $("tsplit").classList.add("on");
+  $("tsplit").textContent = "Exit comparison";
+  $("split").classList.add("on");
+  $("cesiumContainer").style.right = "50%";
+  $("cesiumContainer2").classList.add("on");
+
+  // Labels
+  const isTodayBuild = DATA.model && DATA.model.scenario &&
+                       DATA.model.scenario.type === "today";
+  document.getElementById("sll").textContent = isTodayBuild ? "2017 survey" : "Today";
+  document.getElementById("slr").textContent = isTodayBuild ? "Today" : "2017 survey";
+
+  Cesium.Ion.defaultAccessToken = "";
+  viewer2 = new Cesium.Viewer("cesiumContainer2", {
+    baseLayer: Cesium.ImageryLayer.fromProviderAsync(
+      Promise.resolve(new Cesium.OpenStreetMapImageryProvider({
+        url: "https://tile.openstreetmap.org/"
+      }))),
+    animation:false, timeline:false, geocoder:false, homeButton:false,
+    sceneModePicker:false, baseLayerPicker:false, navigationHelpButton:false,
+    fullscreenButton:false, infoBox:false, selectionIndicator:false
+  });
+  viewer2.scene.globe.baseColor = Cesium.Color.fromCssColorString("#1d2129");
+  viewer2.scene.globe.depthTestAgainstTerrain = true;
+
+  // Mirror buildings from DATA2
+  const bdata2 = DATA2;
+  const gj2 = { type:"FeatureCollection", features: bdata2.buildings.map((b,i) => ({
+    type:"Feature", id:i, properties:{height:b.height, idx:i},
+    geometry:{type:"Polygon", coordinates:[closeRing(b.ring)]}
+  }))};
+  const src2 = await Cesium.GeoJsonDataSource.load(gj2, {clampToGround:false});
+  src2.entities.values.forEach(e => {
+    const h = e.properties.height.getValue();
+    e.polygon.extrudedHeight = h;
+    e.polygon.height = 0;
+    e.polygon.material = buildingColour({height:h});
+    e.polygon.outline = true;
+    e.polygon.outlineColor = Cesium.Color.fromCssColorString("#0f1319").withAlpha(0.55);
+  });
+  await viewer2.dataSources.add(src2);
+
+  // Draw the Dec 21 shadow overlay from DATA2
+  const decDay = bdata2.days.find(d => d.id === "dec");
+  if (decDay) {
+    const mid = Math.floor(decDay.hours.length / 2);
+    const frame = decDay.hours[mid];
+    const bs = bdata2.site.bounds;
+    const rect = Cesium.Rectangle.fromDegrees(bs.west, bs.south, bs.east, bs.north);
+    const prov = Cesium.SingleTileImageryProvider.fromUrl
+      ? await Cesium.SingleTileImageryProvider.fromUrl(frame.png, {rectangle:rect})
+      : new Cesium.SingleTileImageryProvider({url:frame.png, rectangle:rect});
+    const lyr = viewer2.imageryLayers.addImageryProvider(prov);
+    lyr.magnificationFilter = Cesium.TextureMagnificationFilter.NEAREST;
+  }
+
+  // Sync cameras
+  viewer.camera.changed.addEventListener(() => {
+    if (!viewer2) return;
+    viewer2.camera.setView({
+      destination: viewer.camera.position,
+      orientation: { heading: viewer.camera.heading,
+                     pitch: viewer.camera.pitch, roll: viewer.camera.roll }
+    });
+  });
+
+  // Draggable split line
+  const line = $("split-line");
+  line.addEventListener("pointerdown", e => { dragging=true; line.setPointerCapture(e.pointerId); });
+  line.addEventListener("pointermove", e => {
+    if (!dragging) return;
+    const t = e.clientX / window.innerWidth;
+    splitX = Math.max(0.15, Math.min(0.85, t));
+    const pct = (splitX * 100).toFixed(1) + "%";
+    line.style.left = pct;
+    $("cesiumContainer").style.right = (100 - splitX*100).toFixed(1)+"%";
+    $("cesiumContainer2").style.left = pct;
+  });
+  line.addEventListener("pointerup", () => { dragging=false; });
+}
+
+function stopSplit() {
+  splitMode = false;
+  $("tsplit").classList.remove("on");
+  $("tsplit").textContent = "Compare 2017 vs today";
+  $("split").classList.remove("on");
+  $("cesiumContainer").style.right = "";
+  $("cesiumContainer2").classList.remove("on");
+  if (viewer2) { viewer2.destroy(); viewer2 = null; }
 }
 
 start().catch(e => {
