@@ -393,7 +393,7 @@ function renderCopy() {
     "Direct sun and shade computed from LiDAR surface geometry. " +
     "No temperature, no wind, no cloud. This is a shadow model.";
   $("hdrby").innerHTML =
-    `built by <b>Adel</b> &middot; <a id="openabout">how it works and what it is not</a>`;
+    `built by <b>Adel</b> &middot; <a id="openabout">how it works and what it is not</a> &middot; <a href="https://github.com/adelyasser00/shadow-twin" target="_blank" rel="noopener" style="color:#7aa7f0;text-decoration:none">source</a>`;
   $("openabout").addEventListener("click", () => $("about").style.display = "block");
 
   if (DATA.mode === "FIXTURE") {
