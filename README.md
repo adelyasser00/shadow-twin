@@ -1,92 +1,92 @@
 # Shadow twin
 
-Computes where the shadows fall across a city block, hour by hour, from raw
-LiDAR. Runs in a browser, from one self-contained HTML file.
+A shadow study of Central Park South, Manhattan, computed from the city's own
+LiDAR survey and run with New York City's official shadow assessment method.
+It runs in a browser, on desktop and on phones.
 
-For any patch of ground, at any hour, it answers three questions:
+Built by Adel Yasser.
+
+**Try it:** https://shadow-twin-adelyasser00.pages.dev/
+**2017 only:** https://shadow-twin-adelyasser00.pages.dev/2017
+
+For any patch of ground, at any time on the four CEQR analysis days, it answers:
 
 - Is this spot in direct sun, or is something in the way?
-- How many hours of direct sun does it get across the whole day?
-- How much of the open sky can it see?
+- How many hours of direct sun does it get across the day?
+- How much direct sun does each wall of each building get?
 
-All from measured geometry and calculated sun position. No weather data, no
-temperature, no wind.
-
-**It is not a heat model.** It computes no temperature of any kind, no wind, and
-no thermal comfort index. Shade is one input to how a place feels. What this does
-compute, it computes correctly, and it stops where the data stops.
-
-**Current target:** Central Park South, Manhattan, on NYC 2017 LiDAR. The winter
-solstice against the summer solstice, side by side.
-
-| | |
-|---|---|
-| Sun position accuracy | 0.002 degrees on altitude |
-| Solver | shadow sweep plus horizon scan, pure array shifts |
-| Speed | seconds on a CPU for a 600 x 600 grid |
-| Input | classified LAS/LAZ point clouds |
-| Output | one HTML file, no server, no build step |
-| Tests | analytical, against values derived by hand |
+**It is not a heat model.** It computes no temperature, no wind and no thermal
+comfort index. Shade is one input to how a place feels. What this computes, it
+computes from measured geometry and calculated sun position, and it stops where
+the data stops.
 
 ---
 
-## Try it before the download finishes
+## The result
 
-```bash
-python -m pipeline.make_nyc_test_tifs --out /tmp/nyc_test --span-m 700
-python -m pipeline.run_nyc --dsm /tmp/nyc_test --dem /tmp/nyc_test --span 595 --res 2.0
-python -m pipeline.build_viewer
-```
+Frame: 700 m across, 2 m cells, centred on the southern end of Central Park.
+"Today" means the 2017 LiDAR surface raised to current recorded roof heights
+from NYC Building Footprints.
 
-That writes GeoTIFFs in the exact NYC format, feet and EPSG:2263 and all, with
-towers of known height. It proves the reader, the unit conversion, the solver,
-the export and the viewer all work. The geometry is synthetic and the page says
-so in red. It is a smoke test, not a demo.
+Share of the park inside the frame that never gets direct sun during the CEQR
+window:
+
+| CEQR day | 2017 survey | Today |
+|---|---|---|
+| 21 December | 46.9% | 55.3% |
+| 21 March / 21 September | 10.5% | 12.0% |
+| 6 May / 6 August | 2.8% | 3.1% |
+| 21 June | 1.3% | 1.4% |
+
+The difference is almost all in winter. The sun peaks at 25.8 degrees on
+21 December and 72.7 degrees on 21 June, so tall buildings cast their longest
+shadows exactly when the park has the least sun to lose.
+
+Sanity check: the today run reports a tallest object of 472.4 m (1,550 ft),
+Central Park Tower's height. It was finished after the 2017 survey, so this
+confirms the footprint heights are being applied.
+
+**Read these numbers with their limits:** a 700 m frame, not the whole park;
+"today" is a raised 2017 surface, not a new survey; direct sun under clear sky,
+geometry only.
 
 ---
 
-## The one thing you have to do by hand
+## Method
 
-Download the LiDAR. See **`tools/GET_THE_DATA.md`**. Ten minutes.
-
-Everything after that is two commands.
-
----
-
-## Run it
-
-```bash
-python -m pipeline.verify_solar          # solar geometry vs hand values
-python -m pipeline.verify_geometry       # shadows and SVF vs hand values
-
-python -m pipeline.run_nyc --dsm data/nyc --dem data/nyc --span 2400 --res 2.0
-python -m pipeline.build_viewer
-```
-
-Open `viewer/shadow-twin.html`.
-
-Requirements: `pip install numpy pillow rasterio shapely scipy matplotlib`
-
-**Start small.** Run `--span 1600 --res 3.0 --skip-svf` first to confirm the
-tiles are right. It takes seconds. Only then go to full resolution.
-
-**Heavy renders go to Kaggle**, not your laptop. See
-`notebooks/kaggle_render.py`. Free T4, 16 GB, ~30 h a week. Pass `--gpu` there.
-
-**No internet?** See `tools/vendor_cesium.md`. One npm install and the viewer
-never needs the network again.
+- **Timing:** NYC CEQR Technical Manual, Chapter 8. Four analysis days
+  (21 December, 21 March, 6 May, 21 June), from 1.5 hours after sunrise to
+  1.5 hours before sunset, Eastern Standard Time all year, sampled every
+  30 minutes. CEQR assesses shadows on sunlight-sensitive resources such as
+  parks. Street and wall figures are reported here because they matter for
+  people on the ground, not because CEQR asks for them.
+- **Sun position:** NOAA solar position algorithm.
+- **Surface:** highest LiDAR return per 2 m cell, ground from the lowest ground
+  return. Cells more than 6 m from any return are marked no-data and left blank,
+  never filled.
+- **Buildings:** NYC Building Footprints, one polygon per real building, roof
+  height from `height_roof`.
+- **Shadows:** shift-and-subtract shadow sweep (Ratti and Richens).
+- **Walls:** sample points up each wall. For every step, is the wall facing the
+  sun, and is the ray to the sun blocked? Reported by compass quarter (N, E, S,
+  W) and by lower and upper half of the wall.
+- **Solar gain on walls:** clear-sky direct normal irradiance (Meinel, with
+  Kasten and Young air mass) times the cosine of incidence. Direct beam only,
+  no diffuse light, no reflections. An upper bound.
 
 ---
 
 ## What's in the viewer
 
-- **Winter / Summer** toggle. Same geometry, two days of the year.
-- **Time slider** and **Play the day**. Watch the shadows sweep.
-- **Shade now / Sun hours / Sky view** layers.
-- **Click a building** for its height, storeys, and current shadow length.
-- **Clean view for recording** (button, or press `R`). Hides every panel and
-  leaves a single caption line. This is what you record for the post.
-- Keys: `R` clean view, `space` play, arrows step through hours, `Esc` close.
+- The four CEQR days, a time slider and **Play the day**.
+- **Shade now** and **Sun hours** layers.
+- Buildings coloured by **Wall sun** or **Solar gain**, or plain.
+- Click a building for its height and the sun on each wall, in two seasons.
+- **Compare 2017 vs today:** split view, one camera driving both sides, shared
+  colour scale, draggable divider.
+- A compass with the sun on it, and a 3D sun ray.
+- A phone layout, in portrait and landscape.
+- **Clean view for recording** (`R`).
 
 ---
 
@@ -96,138 +96,78 @@ Do not trust it because it renders. Every claim below is checkable.
 
 **Solar geometry.** `verify_solar.py` checks declination at both solstices and
 both equinoxes, peak altitude against the analytical `90 - |lat - declination|`,
-that the sun is due south at its highest, that it is overhead at the equator at
-equinox, and that azimuth sweeps east to west. Altitude is accurate to **0.002
-degrees**. Worst azimuth error is 0.46 degrees, at the moment the sun is nearly
-overhead and azimuth is least well defined.
-
-For New York this shows up directly: 21 December peaks at 25.8 degrees against
-the analytical 25.79, and 21 June at 72.7 against 72.67.
+that the sun is due south at its highest, and that azimuth sweeps east to west.
+For New York, 21 December peaks at 25.8 degrees against the analytical 25.79,
+and 21 June at 72.7 against 72.67.
 
 **Shadow casting.** `verify_geometry.py` builds a tower of known height, puts
-the sun at a known altitude, measures the shadow, and compares it to
-`H / tan(altitude)`. Three heights, three sun angles. Plus direction tests (sun
-east throws the shadow west), an overhead sun shading nothing, and a
-below-horizon sun shading everything.
+the sun at a known altitude, measures the shadow and compares it to
+`H / tan(altitude)`. Three heights, three sun angles, plus direction tests, an
+overhead sun shading nothing and a below-horizon sun shading everything.
 
-**Sky view factor.** Flat ground returns exactly 1.0. A point against an
-infinitely tall wall returns 0.531 where the analytical answer is 0.5, the gap
-being finite azimuth sampling. SVF falls monotonically as canyon walls rise and
-never leaves 0 to 1.
+**Walls.** `verify_facade.py` checks wall orientation and blocking against
+hand-derived cases.
 
-**Units.** The single most dangerous bug in this project is reading US survey
-feet as metres, which makes every shadow 3.28 times too long. `pipeline/nyc.py`
-detects the unit from the CRS and refuses to guess. The run prints the tallest
-object in both metres and feet. **Check it.** Midtown supertalls are 300 to
-470 m. If it prints 1500, stop.
+**Units.** The most dangerous bug in this project is reading US survey feet as
+metres, which makes every shadow 3.28 times too long. The run prints the tallest
+object in both metres and feet. Midtown supertalls are 300 to 470 m. If it
+prints 1,500 m, stop.
 
-**GPU path.** `verify_torch.py` runs both backends on the same input and
-compares cell by cell. The CPU path is the reference because it is the one with
-analytical tests.
+**GPU path.** `verify_torch.py` runs the CPU and GPU backends on the same input
+and compares them cell by cell. The CPU path is the reference.
 
 ---
 
-## How to explain it
+## Run it
 
-**One breath.** It computes where the shadows fall across Midtown, hour by hour,
-from the city's own LiDAR survey. Scrub the day and watch them move. Switch
-between December and June and watch half the street lose the sun.
+```bash
+python -m pipeline.verify_solar
+python -m pipeline.verify_geometry
+python -m pipeline.verify_facade
 
-**To an engineer.** Take a digital surface model, terrain plus everything built
-on it. For each hour compute the sun's position with the NOAA algorithm, then
-sweep every pixel outward toward the sun in one-cell steps. If any surface along
-that ray rises above the sun ray from that pixel, the pixel is shaded. Accumulate
-over the day for sun hours. Scan the horizon in 16 directions and take a
-cosine-squared weighted mean for sky view factor. It is all array shifts, which
-is why it runs in seconds on a CPU and in well under a second on a GPU.
+python -m pipeline.run_nyc --help
+python -m pipeline.build_viewer
+python serve.py
+```
 
-**To an architect.** It is a shadow study, the same deliverable you would produce
-in Revit or Ladybug for a planning submission. The difference is that this one
-covers every building in a square kilometre at once, from public survey data,
-and opens in a browser tab instead of a licensed desktop package.
+The viewer must be served over http. Opening the HTML file from disk breaks
+Cesium's asset loading and the comparison view.
 
-**If someone asks whether this is a heat model.** It is not, and say so before
-they do. Shade is one input to how a place feels. Thermal comfort also needs mean
-radiant temperature, air temperature, humidity and wind, and this computes none
-of them. What it does compute, it computes correctly, and it stops where the
-data stops.
+Data: see `tools/GET_THE_DATA.md`. No LiDAR data is redistributed in this
+repository.
 
 ---
 
 ## What it does not do
 
-- No temperature of any kind, no wind, no comfort index.
+- No temperature, no wind, no comfort index.
 - No cloud. These are clear-sky geometric sun hours, so the real figure on any
   given day is lower.
-- Vegetation in the surface model is treated as fully opaque. Real canopy
-  transmits some light, so tree shade is slightly overstated.
-- Max pooling on downsample keeps roof heights but grows each building by up to
-  one cell, erring toward more shadow rather than less.
-- Whole-cell ray stepping puts each shadow edge within about one cell.
-- Buildings outside the frame cast nothing. Winter shadows in Manhattan run over
-  a kilometre, so crop generously.
-- The survey is a snapshot. Anything built after the capture date is not in it.
+- Trees in the LiDAR surface are treated as solid. Real canopy lets some light
+  through, so tree shade is overstated.
+- Buildings outside the frame cast nothing. Winter shadows from the tallest
+  towers here can reach about 2 km.
+- The 2017 survey is a snapshot. Newer buildings enter only through their
+  footprint roof heights.
 
 ---
 
-## Layout
+## Planned
 
-```
-pipeline/
-  solar.py              NOAA sun position. The only astronomy here.
-  geometry.py           Shadow sweep and sky view factor. CPU reference.
-  geometry_torch.py     Same maths on a GPU. For Kaggle and Modal.
-  laz.py                LAS/LAZ point cloud to DSM and DEM. The NYC download path.
-  tile_info.py          Reads LiDAR headers and says which tiles you still need.
-  nyc.py                Reader for derived GeoTIFF rasters, if you ever get them.
-  footprints.py         Building mask to 3D footprints with median heights.
-  export.py             Rasters to binned PNG overlays plus legend and stats.
-  run_nyc.py            End to end on NYC tiles. The one you run.
-  build_viewer.py       Inlines data.json into the template.
-  make_nyc_test_tifs.py Writes NYC-format test rasters in feet, so the whole
-                        pipeline can be exercised before any download finishes.
-  verify_solar.py       Solar self-tests.
-  verify_geometry.py    Geometry self-tests.
-  verify_torch.py       GPU against CPU.
-tools/
-  GET_THE_DATA.md       Step by step LiDAR download.
-  vendor_cesium.md      Making the viewer work offline.
-  OMNIVERSE.md          Whether Omniverse belongs in this. Short answer: no.
-notebooks/
-  kaggle_render.py      Cell by cell script for the full resolution render.
-viewer/
-  template.html         The viewer, with a data placeholder.
-  data.json             Current solver output.
-  shadow-twin.html      Built, self-contained. Open this one.
-```
+- A larger frame, with shadows cast from buildings outside it.
+- Mean radiant temperature, to move from "is it in the sun" to "how does it
+  feel".
 
 ---
 
-## Next, in order
+## Data
 
-1. Download the tiles. `tools/GET_THE_DATA.md`.
-2. Small run. Check the tallest-object figure is sane.
-3. Full run, on Kaggle if it is slow.
-4. Vendor Cesium so the page works without a connection.
-5. Press `R`, play the December day, record 20 seconds.
+- NYC 2017 topobathymetric LiDAR, via NYC's orthoimagery finder.
+- NYC Building Footprints, NYC Open Data.
+- Central Park boundary polygon.
 
----
+Methods, data sources and papers are credited in `CREDITS.md`.
 
-## Publishing a build
+## Licence
 
-`viewer/shadow-twin.html` is deliberately gitignored. It is generated output and
-it can reach several megabytes, which does not belong in git history.
-
-To share a result, drag the file onto Cloudflare Pages or any static host and
-link it from here. Do not upload `viewer/vendor/` with it; the CDN serves Cesium
-faster than a static host will.
-
----
-
-## Licence and credit
-
-MIT, see `LICENSE`. Data sources, methods and the papers behind them are in
-`CREDITS.md`. No LiDAR data is redistributed in this repository.
-
-Contributing rules and how credit is recorded: `CONTRIBUTING.md` and
-`AUTHORS.md`.
+MIT, see `LICENSE`.

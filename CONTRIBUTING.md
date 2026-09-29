@@ -2,16 +2,17 @@
 
 ## Before you write code
 
-Run both self-test suites. They check the solver against values you can derive
+Run the self-test suites. They check the solver against values you can derive
 on paper, and they are the reason anything here can be trusted.
 
 ```
 python -m pipeline.verify_solar
 python -m pipeline.verify_geometry
+python -m pipeline.verify_facade
 ```
 
-Both must print `ALL CHECKS PASSED`. If either fails on a clean checkout, that
-is a bug worth reporting on its own.
+All must print `ALL CHECKS PASSED`. If any fails on a clean checkout, that is a
+bug worth reporting on its own.
 
 ## The rules that are not negotiable
 
@@ -30,12 +31,13 @@ cell, and `verify_torch.py` checks that. Where they disagree, the CPU path wins.
 **Fixed colour bins.** Layers are binned on stated thresholds and never
 stretched to their own range. Two runs have to stay comparable.
 
-**Do not weaken the caveats.** The About panel lists what the model does not
-compute. Adding a capability means updating that list. Removing a caveat to make
-the output sound stronger is not a contribution.
+**Do not weaken the caveats.** The viewer's "how it works and what it is not"
+panel lists what the model does not compute. Adding a capability means updating
+that list. Removing a caveat to make the output sound stronger is not a
+contribution.
 
 ## Scope
 
-This computes shadow geometry. It does not compute temperature, wind, or thermal
-comfort, and a pull request that implies otherwise in the UI copy will be asked
-to change the copy, not the claim.
+This computes shadow geometry and direct sun on walls. It does not compute
+temperature, wind, or thermal comfort, and a pull request that implies otherwise
+in the UI copy will be asked to change the copy, not the claim.

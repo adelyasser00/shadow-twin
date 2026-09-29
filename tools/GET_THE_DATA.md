@@ -1,12 +1,10 @@
 # Getting the Manhattan LiDAR
 
-This is the only step you do by hand. Everything after it is two commands.
+This is the only step you do by hand. Everything after it is a few commands.
 
 **The downloader gives you `.laz` point clouds named by tile number, like
 `990217.laz`.** That is the raw classified LiDAR, not a derived raster. The
-pipeline reads it directly. Ignore anything you read earlier about `hh_` and
-`be_` GeoTIFFs; that was the New York State portal, not the NYC one, and it
-sent you looking for files that download does not offer.
+pipeline reads it directly.
 
 Point clouds are better anyway. You choose the output resolution, you never
 build a huge intermediate raster, and the surface is made in front of you
@@ -22,23 +20,24 @@ instead of by someone else.
 
 **2. Search a coordinate.**
 
-Paste **`40.7655, -73.9800`** into the search box.
+Paste **`40.7668, -73.9790`** into the search box.
 
-That is West 57th Street between 6th and 7th, one block south of the park.
-Aiming here rather than at the park centre puts the tower cluster in frame
-together with the park's southern lobe, which is the shot you want. Aiming at
-the park centre gives you mostly grass.
+That is the centre of the published study, just south of the park. Aiming here
+rather than at the park centre puts the tower cluster along 57th Street in frame
+together with the park's southern lobe, which is the area this study covers.
+Aiming at the park centre gives you mostly grass.
 
 **3. Click the tile, press Download LiDAR.**
 
-You get `<tile>.laz`. Repeat for the neighbouring tiles.
+You get `<tile>.laz`. Repeat for the neighbouring tiles. The published run uses
+tiles `987215`, `987217`, `990217` and `992217`.
 
 **Which tiles: do not guess, measure.** The grid is rotated to the Manhattan
 street grid and the numbering does not run the way it looks on screen. After
 each download, run:
 
 ```bash
-python -m pipeline.tile_info --laz data/nyc --lat 40.7655 --lon -73.9800 --span 1600
+python -m pipeline.tile_info --laz data/nyc --lat 40.7668 --lon -73.9790 --span 700
 ```
 
 That reads only the file headers, so it is instant even on a 400 MB tile. It
@@ -47,18 +46,18 @@ inside them, which compass directions are short and by how many metres, and the
 largest square that does fit what you already hold.
 
 Work the loop: download a tile, run tile_info, read which direction is missing,
-go get that one. Two or three tiles is normally enough for a 1600 m square.
-Stop there, these files are hundreds of megabytes.
+go get that one. Stop when the square fits, these files are hundreds of
+megabytes.
 
 **4. Put them all in one folder.**
 
 ```
-heat-twin/
-  data/
-    nyc/
-      990217.laz
-      992215.laz
-      992217.laz
+data/
+  nyc/
+    987215.laz
+    987217.laz
+    990217.laz
+    992217.laz
 ```
 
 Filenames do not matter. The loader takes every `.laz` and `.las` in the folder
@@ -68,23 +67,20 @@ and grids them together.
 
 ```
 pip install laspy lazrs
-python -m pipeline.tile_info --laz data/nyc --lat 40.7655 --lon -73.9800 --span 1600
-python -m pipeline.run_nyc --laz data/nyc --lat 40.7655 --lon -73.9800 --span 1600 --res 3.0 --skip-svf
+python -m pipeline.tile_info --laz data/nyc --lat 40.7668 --lon -73.9790 --span 700
+python -m pipeline.run_nyc --laz data/nyc --lat 40.7668 --lon -73.9790 --span 700 --res 3.0 --skip-svf
 python -m pipeline.build_viewer
 ```
 
-Small and fast first. Confirm it looks right, then go big.
+Small and fast first. Confirm it looks right, then go to 2 m. See
+`python -m pipeline.run_nyc --help` for the footprint and scenario options.
 
 **One command per line, no backslashes.** PowerShell uses a backtick for line
 continuation, not a backslash, so a bash-style multi-line command silently
 breaks apart and only the first fragment runs. If `run_nyc` errors and you then
-run `build_viewer` anyway, it happily rebuilds whatever `data.json` was already
-there and you get an old result that looks like a new one. Check the site name
-printed by `build_viewer` matches what you just asked for.
-
-If `tile_info` says your square does not fit, take the "largest square" figure
-it prints and pass that as `--span`. One tile is usually good for 700 to 800 m,
-which still holds the tower cluster and the park edge.
+run `build_viewer` anyway, it rebuilds whatever `data.json` was already there
+and you get an old result that looks like a new one. Check the site name printed
+by `build_viewer` matches what you just asked for.
 
 ---
 
@@ -92,10 +88,10 @@ which still holds the tower cluster and the park edge.
 
 ```
 CRS EPSG:2263  1 unit = 0.304801 m
-target grid 533 x 533 at 3.0 m
-reading 990217.laz  38,000,000 points
+target grid ... at 3.0 m
+reading 990217.laz  ... points
 ... points gridded, ... of them ground class
-surface coverage 94.2% of cells got a return
+surface coverage ...% of cells got a return
 tallest object 472.4 m above street (1550 ft)
 ```
 
@@ -113,38 +109,29 @@ tallest object 472.4 m above street (1550 ft)
 
 ## When it goes wrong
 
-**"No points from these tiles landed inside a 1600 m square"**
+**"No points from these tiles landed inside the square"**
 The tiles do not cover the coordinate you asked for. Check the footprints on the
 downloader map.
 
 **"warning: large gaps. You are probably missing neighbouring tiles."**
-Exactly what it says. Add tiles to the same folder and re-run. Nothing else
-changes.
+Add tiles to the same folder and re-run. Nothing else changes.
 
 **"warning: almost no ground-classified points"**
-The tile has no ASPRS class 2 returns, so street level is being estimated from
-block minima instead. Usable, less accurate. Worth noting in the About panel if
-it happens.
+The tile has few ASPRS class 2 returns, so street level is estimated from block
+minima instead. Usable, less accurate.
 
 **"This point cloud carries no CRS"**
-Unexpected for NYC. Send me the filename.
+Unexpected for NYC. Open an issue with the filename.
 
 **It is slow**
 Tens of millions of points take a minute or two to grid. After that the solver
-is seconds. If the solve itself is slow, raise `--res` or move to Kaggle.
+is seconds. If the solve itself is slow, raise `--res` or use the GPU path.
 
 ---
 
-## Sizing
+## Before you pick a span
 
-| span | res | grid | roughly |
-|---|---|---|---|
-| 1600 m | 3.0 m | 533 x 533 | seconds after gridding |
-| 2400 m | 2.0 m | 1200 x 1200 | a few minutes on CPU |
-| 2400 m | 1.0 m | 2400 x 2400 | Kaggle GPU |
-
-One thing worth knowing before you pick a span. On 21 December in New York the
-sun peaks at about 26 degrees. A 400 m tower throws a shadow roughly 800 m long
-at noon and well over 2 km by mid afternoon. Towers outside your square cast
-nothing here, so crop generously or the edge of the frame will look brighter
-than the real street is.
+On 21 December in New York the sun peaks at about 26 degrees and sits near
+13 degrees at the start of the CEQR window. A 472 m tower then throws a shadow
+about 2 km long. Towers outside your square cast nothing here, so crop
+generously or the edge of the frame will look brighter than the real street is.
