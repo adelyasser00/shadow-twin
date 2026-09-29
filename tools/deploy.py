@@ -31,6 +31,8 @@ OUT = os.path.join(HERE, "deploy")
 
 WANT = [("shadow-twin-today.html", "index.html", True),
         ("shadow-twin-2017.html", "2017.html", False),
+        ("shadow-twin-today.html", "shadow-twin-today.html", False),
+        ("shadow-twin-2017.html", "shadow-twin-2017.html", False),
         ("preview.png", "preview.png", False)]
 
 

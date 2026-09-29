@@ -22,9 +22,9 @@ OUT_NAME = "shadow-twin.html"
 
 
 def main():
-    with open(os.path.join(VIEWER, "template.html")) as f:
+    with open(os.path.join(VIEWER, "template.html"), encoding="utf-8") as f:
         html = f.read()
-    with open(os.path.join(VIEWER, "data.json")) as f:
+    with open(os.path.join(VIEWER, "data.json"), encoding="utf-8") as f:
         raw = f.read()
 
     if "/*__DATA__*/" not in html:
@@ -32,7 +32,9 @@ def main():
 
     out = html.replace("/*__DATA__*/", raw.replace("</script>", "<\\/script>"))
     path = os.path.join(VIEWER, OUT_NAME)
-    with open(path, "w") as f:
+    # Unix line endings always, even on Windows. The comparison mode reads the
+    # other build's data line by line, and mixed endings are how it broke.
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(out)
 
     d = json.loads(raw)
