@@ -4,7 +4,8 @@ Facade solver check on a case with a known answer.
     python -m pipeline.verify_facade
 
 One isolated 200 m tower on flat ground, footprint rotated 29 degrees like
-Manhattan's grid. With nothing around it, every wall that faces the sun must be
+Manhattan's grid, solved twice: on a north-up grid, and on a grid turned 29
+degrees so the tower sits square to it. With nothing around it, every wall that faces the sun must be
 lit for every hour it faces it, and no wall may be lit while facing away. The
 expected hours are computed from sun geometry alone, independently of the ray
 march, so this catches self-shadowing and orientation bugs.
@@ -53,6 +54,37 @@ def main():
             expect = sum(1 for p in pos if math.cos(math.radians(p.azimuth - normal)) > 0.02)
             got = float(ro[o]["sun_hours"][1])
             # Wall-bin averaging mixes in corner cells, so allow 0.6 h.
+            good = abs(got - expect) <= 0.6
+            ok &= good
+            print(f"{'PASS' if good else 'FAIL'}  {label:<12} {o} wall ({normal:3d} deg)  "
+                  f"expected {expect:>2} h  got {got:4.1f} h")
+
+    # Same tower, but the grid itself turned 29 degrees to follow the street
+    # grid, the way the Central Park frame is. Now the walls run along cell
+    # edges, and the only thing telling the solver which way is north is
+    # bearing_deg. The answers must not change.
+    print()
+    print("same tower on a grid turned 29 degrees")
+    rb = np.zeros((n, n), dtype=bool)
+    rb[n // 2 - 12: n // 2 + 12, n // 2 - 20: n // 2 + 20] = True
+    rh = np.where(rb, 200.0, 0).astype(np.float32)
+    rl = rb.astype(np.int32)
+    for date, label in [((2026, 3, 21), "21 March"), ((2026, 6, 21), "21 June"),
+                        ((2026, 12, 21), "21 December")]:
+        pos = []
+        for hh in range(8, 17):
+            utc = datetime(*date, hh, 0, tzinfo=timezone.utc) + timedelta(hours=5)
+            p = sun_position(utc, LAT, LON)
+            if p.above_horizon:
+                pos.append(p)
+        pts = facade.wall_samples(rb, rh, rl, cell, levels=4, log=lambda *_: None)
+        r = facade.solve(pts, ground + rh, ground, cell, pos,
+                         [str(i) for i in range(len(pos))], log=None,
+                         labels_grid=rl, bearing_deg=29.0)
+        ro = facade.per_building(pts, r, 1, bearing_deg=29.0)
+        for o, normal in WALLS.items():
+            expect = sum(1 for p in pos if math.cos(math.radians(p.azimuth - normal)) > 0.02)
+            got = float(ro[o]["sun_hours"][1])
             good = abs(got - expect) <= 0.6
             ok &= good
             print(f"{'PASS' if good else 'FAIL'}  {label:<12} {o} wall ({normal:3d} deg)  "

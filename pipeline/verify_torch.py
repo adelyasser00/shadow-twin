@@ -42,6 +42,20 @@ def main():
         print(f"  {'PASS' if good else 'FAIL'}  shadow alt {alt:5.1f} az {az:6.1f}  "
               f"{diff} cells differ of {a.size}")
 
+    # The windowed sweep the runner actually uses.
+    from .geometry import sweep
+    from .geometry_torch import TorchSweeper
+    ts = TorchSweeper(dsm)
+    for alt, az in [(12.8, 137.0), (40.0, 222.0)]:
+        win = (30, 190, 25, 200)
+        a = sweep(dsm, 2.0, alt, az, window=win)
+        b = ts(dsm, 2.0, alt, az, window=win)
+        diff = int((a != b).sum())
+        good = diff == 0
+        ok &= good
+        print(f"  {'PASS' if good else 'FAIL'}  windowed sweep alt {alt:5.1f} az {az:6.1f}  "
+              f"{diff} cells differ of {a.size}")
+
     a = sky_view_factor(dsm, 2.0, 16, 200)
     b = sky_view_factor_gpu(t, 2.0, 16, 200).cpu().numpy()
     err = float(np.abs(a - b).max())

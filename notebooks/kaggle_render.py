@@ -10,12 +10,12 @@ HOW TO USE
 2. Settings panel on the right:
        Accelerator  ->  GPU T4 x2   (one is enough, it takes what it needs)
        Internet     ->  On          (only to pip install, turn it off after)
-3. Upload your tiles:  Add Data -> Upload -> New Dataset
-       put the hh_*.tif and be_*.tif files in
+3. Upload your data:  Add Data -> Upload -> New Dataset
+       put the .laz tiles, footprints.geojson and park.geojson in
        it lands at /kaggle/input/<your-dataset-name>/
 4. Upload this repo the same way, or clone it if it is on GitHub.
 5. Paste the cells below, in order, one per Kaggle cell.
-6. When it finishes, download viewer/shadow-twin.html from the output panel.
+6. When it finishes, download shadow-twin-build.zip from the output panel.
 
 Each block below is marked as its own cell. Keep them separate so a tweak to
 the plot does not re-run the solver.
@@ -47,18 +47,25 @@ CELL_2 = r'''
 !python -m pipeline.verify_torch
 '''
 
-# ===================== CELL 3 : small run first =====================
-# Prove the tiles are right before spending time on a big render.
+# ===================== CELL 3 : check coverage and the regression =====================
+# Prove the tiles and the park file are right before spending time on a big
+# render. The 700 m regression should print the published 46.9% for December.
 CELL_3 = r'''
-!python -m pipeline.tile_info --laz {DATA} --lat 40.7655 --lon -73.9800 --span 1600
-!python -m pipeline.run_nyc --laz {DATA} --lat 40.7655 --lon -73.9800 --span 1600 --res 3.0 --skip-svf
+!python -m pipeline.nyc_footprints crop {DATA}/footprints.geojson /kaggle/working/footprints_crop.geojson --laz {DATA}
+!python -m pipeline.tile_info --laz {DATA} --preset central-park --resource {DATA}/park.geojson
+!python -m pipeline.run_nyc --laz {DATA} --footprints /kaggle/working/footprints_crop.geojson --resource {DATA}/park.geojson --resource-name "Central Park" --lat 40.7668 --lon -73.9790 --span 700 --skip-svf --skip-facades --out /kaggle/working/check.json
 '''
 
 # ===================== CELL 4 : the real render =====================
-# Only after cell 3 reported a sensible "tallest object" figure.
+# Only after cell 3 reported a sensible tallest object and the regression matched.
+# The first run grids the LiDAR into data/cache, the second reuses it.
 CELL_4 = r'''
-!python -m pipeline.run_nyc --laz {DATA} --lat 40.7655 --lon -73.9800 --span 2400 --res 1.0 --gpu --site-name "Central Park South, Manhattan"
+FP = "/kaggle/working/footprints_crop.geojson"
+!python -m pipeline.run_nyc --preset central-park --laz {DATA} --footprints {FP} --resource {DATA}/park.geojson --gpu --save-rasters data/runs/cp_2017.npz
 !python -m pipeline.build_viewer
+!python -m pipeline.run_nyc --preset central-park --laz {DATA} --footprints {FP} --resource {DATA}/park.geojson --gpu --burn-footprints --save-rasters data/runs/cp_today.npz
+!python -m pipeline.build_viewer
+!python tools/compare_runs.py data/runs/cp_2017.npz data/runs/cp_today.npz
 '''
 
 # ===================== CELL 5 : sanity picture =====================
@@ -90,12 +97,13 @@ for day in d["days"]:
 print("tallest in frame:", d["site"]["tallest_m"], "m")
 '''
 
-# ===================== CELL 6 : get the file out =====================
+# ===================== CELL 6 : get the files out =====================
+# A whole-park build is a small page plus a folder of images per scenario.
 CELL_6 = r'''
-import shutil, os
-shutil.copy("viewer/shadow-twin.html", "/kaggle/working/shadow-twin.html")
-print("size:", os.path.getsize("/kaggle/working/shadow-twin.html") / 1e6, "MB")
-# It now appears in the Output panel on the right. Download it from there.
+import shutil
+shutil.make_archive("/kaggle/working/shadow-twin-build", "zip", "viewer",
+                    ".")
+print("download shadow-twin-build.zip from the Output panel, unzip it into viewer/")
 '''
 
 if __name__ == "__main__":

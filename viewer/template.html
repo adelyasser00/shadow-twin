@@ -3,19 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>Shadow twin: Central Park South</title>
+<title>Shadow twin: Central Park</title>
 <!-- Link preview. LinkedIn, Slack and WhatsApp read these when someone pastes
      the URL. Without them the card is a blank box with a bare domain, which
      costs clicks. preview.png must sit next to this file on the host. -->
 <meta property="og:type" content="website">
-<meta property="og:title" content="Shadow twin: Central Park South, Manhattan">
+<meta property="og:title" content="Shadow twin: Central Park, Manhattan">
 <meta property="og:description" content="Where the shadows fall on Central Park, hour by hour, from New York's own LiDAR survey and building footprints. Built on the method the city uses for environmental review.">
 <meta property="og:image" content="preview.png">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Shadow twin: Central Park South, Manhattan">
+<meta name="twitter:title" content="Shadow twin: Central Park, Manhattan">
 <meta name="twitter:description" content="Shadows on Central Park, hour by hour, from public LiDAR. Open source.">
 <meta name="twitter:image" content="preview.png">
-<meta name="description" content="Interactive shadow study of Central Park South from NYC LiDAR and building footprints, following the CEQR analysis method.">
+<meta name="description" content="Interactive shadow study of Central Park from NYC LiDAR and building footprints, following the CEQR analysis method.">
 <style>
   html,body,#cesiumContainer{width:100%;height:100%;margin:0;padding:0;overflow:hidden}
   body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#0d1014;
@@ -406,6 +406,7 @@ function hasBothModes() {
 // DATA2 is the comparison dataset. The viewer tries to load it from
 // a relative URL; if it is not present, split mode is silently disabled.
 let DATA2 = null;
+let cmpState = "loading";   // loading | ready | none
 let buildMode = "sun";      // sun | gain | flat
 let buildOpacity = 1.0;
 
@@ -462,8 +463,13 @@ const hasSvf = () => DATA.svf !== null && DATA.svf !== undefined;
 function renderCopy() {
   const s = DATA.site, m = DATA.model;
   $("hdrtitle").textContent = s.name;
+  const fr = s.frame;
+  const size = (fr && Math.abs(fr.length_m - fr.width_m) > 1)
+    ? `${(fr.length_m / 1000).toFixed(1)} by ${(fr.width_m / 1000).toFixed(1)} km`
+    : `${s.span_m} m across`;
+  document.title = "Shadow twin: " + s.name.replace(/, Manhattan$/, "");
   $("hdrsub").textContent =
-    `${s.span_m} m across at ${s.cellsize_m} m per cell \u00b7 ` +
+    `${size} at ${s.cellsize_m} m per cell \u00b7 ` +
     `tallest object in frame ${s.tallest_m} m (${s.tallest_ft} ft) \u00b7 looking up the avenues`;
   $("hdrcav").textContent =
     "Direct sun and shade computed from LiDAR surface geometry. " +
@@ -515,9 +521,11 @@ function renderCopy() {
       finished after the survey. Footprint heights are single roof values, so
       spires and setbacks are simplified.</p>` : ""}
     <p>Buildings: ${m.building_source}. The LiDAR surface was captured in May
-    2017; anything built since appears as a building but is missing from the
-    shadow surface. ${s.nodata_frac > 0 ? `${(s.nodata_frac*100).toFixed(0)}% of
-    the frame lies outside the LiDAR tiles and is blanked, not guessed.` : ""}</p>
+    2017. ${s.nodata_frac > 0 ? `${(s.nodata_frac*100).toFixed(1)}% of
+    the frame lies outside the LiDAR tiles and is blanked, not guessed.` : ""}
+    ${s.water_frac > 0 ? `${(s.water_frac*100).toFixed(1)}% of the frame is water,
+    which the laser gets no return from. It is kept as open surface at the level
+    of the ground around it, not blanked, because it gets sun like any lawn.` : ""}</p>
 
     <div class="k">How the sun is placed</div>
     <p>${m.solar_algorithm}, checked against solstice and equinox geometry that
@@ -531,11 +539,19 @@ function renderCopy() {
           shadow, not less.</li>
       <li>Shadow edges land to the nearest cell, so each carries about
           ${s.cellsize_m} m of uncertainty.</li>
-      <li>Buildings outside the frame cast no shadow here. On a winter afternoon a
+      ${m.buffer_desc ? `<li>${m.buffer_desc} On a winter morning a tall tower
+          throws a shadow close to two kilometres long, which is why the buffer
+          is that wide. The first 200 m of city around the frame, and towers over
+          100 m further out, are drawn plain grey for context.</li>`
+        : `<li>Buildings outside the frame cast no shadow here. On a winter afternoon a
           tall tower throws a shadow over a kilometre long, so anything just
-          beyond the edge is missing from this view.</li>
-      <li>Cells within ${s.edge_margin_m} m of the edge are excluded from every
-          statistic and blanked in every image for the same reason.</li>
+          beyond the edge is missing from this view.</li>`}
+      ${s.edge_margin_m > 0 ? `<li>Cells within ${s.edge_margin_m} m of the edge are
+          excluded from every statistic and blanked in every image for the same
+          reason.</li>` : ""}
+      ${DATA.days[0] && DATA.days[0].stats.resource ? `<li>Street figures cover open
+          ground outside buildings and outside ${DATA.days[0].stats.resource.name},
+          so the park is never counted twice.</li>` : ""}
       <li>Clear sky. Cloud is not modelled, so these are geometric sun hours and
           the real figure on any given day is lower.</li>
       <li>The survey is a snapshot. Anything built after the capture date is not
@@ -615,7 +631,14 @@ function buildingGeoJson() {
   };
 }
 
+// Context buildings sit outside the study frame. One light, flat colour, so
+// the eye reads them as the rest of the city and not as part of the result.
+const CONTEXT_CSS = "#7d8590";
+
 function buildingColour(b) {
+  if (b.context) {
+    return Cesium.Color.fromCssColorString(CONTEXT_CSS).withAlpha(buildOpacity);
+  }
   if (buildMode === "flat" || !hasFacades()) {
     const t = Math.max(0, Math.min(1, (b.height - 15) / 240));
     return Cesium.Color.fromCssColorString("#333b47")
@@ -635,6 +658,10 @@ function recolourBuildings() {
   for (let i = 0; i < ents.length; i++) {
     const e = ents[i];
     const b = DATA.buildings[e.properties.idx.getValue()];
+    // Context never changes colour with the day or the mode, only with the
+    // opacity slider. Skipping it saves rebuilding thousands of polygons.
+    if (b.context && e._alpha === buildOpacity) continue;
+    if (b.context) e._alpha = buildOpacity;
     e.polygon.material = buildingColour(b);
   }
   refreshSplit();
@@ -757,8 +784,10 @@ function renderStats() {
   $("statshead").textContent = activeLayer === "svf" ? "Sky view" : d.label;
   $("statstable").innerHTML = rows
     .map(([k, v]) => `<tr><td class="k">${k}</td><td class="v">${v}</td></tr>`).join("");
-  $("statscope").innerHTML = note +
-    ` Rooftops and a ${DATA.site.edge_margin_m} m border are excluded throughout.`;
+  $("statscope").innerHTML = note + (DATA.site.edge_margin_m > 0
+    ? ` Rooftops and a ${DATA.site.edge_margin_m} m border are excluded throughout.`
+    : " Rooftops are excluded throughout." + (s.resource
+      ? ` Street means open ground outside buildings and outside ${s.resource.name}.` : ""));
 }
 
 function renderRecBadge() {
@@ -810,6 +839,19 @@ function setLayer(name) {
   refresh();
 }
 
+// Big builds keep each image in its own file next to the page. Ask for the
+// whole day's frames up front so pressing play does not stall on the network.
+const _warm = new Set();
+function prefetchDay(d) {
+  const urls = d.hours.map(h => h.png).concat([d.sunhours.png]);
+  for (const u of urls) {
+    if (!u || u.startsWith("data:") || _warm.has(u)) continue;
+    _warm.add(u);
+    const im = new Image();
+    im.src = u;
+  }
+}
+
 function setDay(i) {
   dayIndex = i;
   document.querySelectorAll("#dayseg button").forEach((b, j) =>
@@ -817,6 +859,7 @@ function setDay(i) {
   const n = day().hours.length;
   $("time").max = n - 1;
   setHour(Math.min(hourIndex, n - 1));
+  prefetchDay(day());
   for (const k in _domCache) delete _domCache[k];
   recolourBuildings();
 }
@@ -857,16 +900,19 @@ function homeView() {
   // Manhattan's street grid runs about 29 degrees east of true north, so the
   // camera looks straight up the avenues from behind the site. Heading and the
   // offset direction must agree: the camera sits opposite the way it looks.
-  const s = DATA.site;
-  const heading = 29;
-  const back = s.span_m * 0.95;                 // metres behind the centre
+  // A whole-park run says where to start, the south end with the towers in
+  // front; older runs fall back to looking up from behind the frame centre.
+  const s = DATA.site, cam = s.camera;
+  const heading = cam ? cam.heading : 29;
+  const back = cam ? cam.back_m : s.span_m * 0.95;   // metres behind the target
+  const tLat = cam ? cam.lat : s.centre_lat, tLon = cam ? cam.lon : s.centre_lon;
   const h = Cesium.Math.toRadians(heading);
   const dN = -back * Math.cos(h), dE = -back * Math.sin(h);
-  const lat = s.centre_lat + dN / 111320;
-  const lon = s.centre_lon + dE / (111320 * Math.cos(Cesium.Math.toRadians(s.centre_lat)));
+  const lat = tLat + dN / 111320;
+  const lon = tLon + dE / (111320 * Math.cos(Cesium.Math.toRadians(tLat)));
   viewer.camera.flyTo({
-    destination: Cesium.Cartesian3.fromDegrees(lon, lat, s.span_m * 0.62),
-    orientation: { heading: h, pitch: Cesium.Math.toRadians(-33), roll: 0 },
+    destination: Cesium.Cartesian3.fromDegrees(lon, lat, cam ? cam.height_m : s.span_m * 0.62),
+    orientation: { heading: h, pitch: Cesium.Math.toRadians(cam ? cam.pitch : -33), roll: 0 },
     duration: 1.5
   });
 }
@@ -934,6 +980,11 @@ function wireUp() {
   });
   $("tsplit").addEventListener("click", () => {
     if (!hasBothModes()) {
+      if (cmpState === "loading") {
+        $("tsplit").textContent = "Loading the comparison...";
+        setTimeout(() => { if (!splitMode) $("tsplit").textContent = "Compare 2017 vs today"; }, 1800);
+        return;
+      }
       $("tsplit").textContent = "No comparison file";
       $("tsplit").disabled = true;
       return;
@@ -984,7 +1035,10 @@ function wireUp() {
     }
     $("picktable").innerHTML = rows
       .map(([k, v]) => `<tr><td>${k}</td><td class="v">${v}</td></tr>`).join("");
-    $("picknote").innerHTML = b.sun
+    $("picknote").innerHTML = b.context
+      ? "Outside the study frame. It is drawn because its shadow reaches in; "
+        + "its walls are not scored."
+      : b.sun
       ? "Each wall is tested for which way it faces and what stands in front "
         + "of it, hour by hour. Base and crown are the lower and upper half of "
         + "the sunniest wall. Solar gain is the direct beam under a clear sky, "
@@ -1028,9 +1082,16 @@ function updateCompass(force) {
     `${fmt(sun.az, 0)}&deg;`;
 }
 
+function sunAnchor() {
+  const s = DATA.site, cam = s.camera;
+  return cam ? { lat: cam.lat, lon: cam.lon, len: cam.back_m * 0.8 }
+             : { lat: s.centre_lat, lon: s.centre_lon, len: s.span_m * 0.75 };
+}
+
 function sunEnd() {
-  const s = DATA.site, sun = currentSun();
-  const L = s.span_m * 0.75;
+  const a = sunAnchor(), sun = currentSun();
+  const s = { centre_lat: a.lat, centre_lon: a.lon };
+  const L = a.len;
   const alt = Cesium.Math.toRadians(sun.alt), az = Cesium.Math.toRadians(sun.az);
   const east = L * Math.cos(alt) * Math.sin(az);
   const north = L * Math.cos(alt) * Math.cos(az);
@@ -1041,8 +1102,8 @@ function sunEnd() {
 }
 
 function addSun() {
-  const s = DATA.site;
-  const base = Cesium.Cartesian3.fromDegrees(s.centre_lon, s.centre_lat, 0);
+  const a = sunAnchor();
+  const base = Cesium.Cartesian3.fromDegrees(a.lon, a.lat, 0);
   sunRay = viewer.entities.add({
     polyline: {
       positions: new Cesium.CallbackProperty(() => [base, sunEnd()], false),
@@ -1083,11 +1144,8 @@ async function start() {
   viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#1d2129");
   viewer.scene.globe.depthTestAgainstTerrain = true;
   viewer.scene.fog.enabled = true;
-  await loadComparison();
-  if (!DATA2) {
-    $("tsplit").style.opacity = ".4";
-    $("tsplit").title = "Open the today or 2017 build via serve.py to enable comparison";
-  }
+  $("tsplit").style.opacity = ".4";
+  $("tsplit").title = "Loading the other build";
 
   renderCopy();
   await addBuildings();
@@ -1098,6 +1156,14 @@ async function start() {
   setDay(0);
   homeView();
   $("boot").style.display = "none";
+  // The other build is as big as this one. Fetch it once the scene is up,
+  // so the first picture never waits on two downloads.
+  loadComparison().then(() => {
+    cmpState = DATA2 ? "ready" : "none";
+    $("tsplit").style.opacity = DATA2 ? "" : ".4";
+    $("tsplit").title = DATA2 ? ""
+      : "Open the today or 2017 build via serve.py to enable comparison";
+  });
   console.log("map library loaded from: " + src.name);
 }
 

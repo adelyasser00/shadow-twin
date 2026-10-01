@@ -8,7 +8,7 @@ import math
 
 import numpy as np
 
-from .geometry import cast_shadow, sky_view_factor
+from .geometry import cast_shadow, sky_view_factor, sweep
 
 CELL = 2.0  # metres
 
@@ -139,6 +139,45 @@ def main():
         f"{'PASS' if monotonic else 'FAIL'}  SVF decreases monotonically with wall height and stays in [0,1]"
     )
     ok &= monotonic
+
+    print()
+
+    # 6. A rotated grid. The frame turned 29 degrees to follow Manhattan: the
+    #    sun due south is at grid azimuth 151, and the shadow must still run
+    #    due north, H / tan(a) long, measured along true north in grid terms.
+    bearing = 29.0
+    for height, alt in [(40.0, 25.8), (60.0, 45.0)]:
+        dsm, c, h = with_tower(n=260, height=height, size_cells=12)
+        lit = sweep(dsm, CELL, alt, (180.0 - bearing) % 360.0)
+        # True north, in grid terms, is bearing -29: up and to the left.
+        a = math.radians(-bearing)
+        run, r, q = 0.0, float(c), float(c)
+        step = 0.25
+        # Leave the tower first.
+        while dsm[int(round(r)), int(round(q))] > 0:
+            r -= step * math.cos(a); q += step * math.sin(a)
+        start = (r, q)
+        while lit[int(round(r)), int(round(q))] == 0.0:
+            r -= step * math.cos(a); q += step * math.sin(a)
+        measured_m = math.hypot(r - start[0], q - start[1]) * CELL
+        expected_m = height / math.tan(math.radians(alt))
+        ok &= report(f"rotated grid shadow due north, H={height:.0f} m, sun {alt:.1f}",
+                     expected_m, measured_m, CELL * 1.5, "m")
+
+    # 7. A window sees the whole surface. A tower outside the window must
+    #    still shade cells inside it, and the window answer must equal the
+    #    full answer cropped.
+    dsm = np.zeros((240, 240), dtype=np.float32)
+    dsm[200:210, 115:125] = 120.0              # tower south of the window
+    win = (20, 180, 20, 220)
+    full = sweep(dsm, CELL, 30.0, 180.0)
+    part = sweep(dsm, CELL, 30.0, 180.0, window=win)
+    same = bool((full[20:180, 20:220] == part).all())
+    shaded_in = int((part[:, 95:105] == 0).sum())
+    good = same and shaded_in > 100
+    print(f"{'PASS' if good else 'FAIL'}  window equals the full sweep cropped, and a tower "
+          f"outside it shades {shaded_in} cells inside")
+    ok &= good
 
     print("-" * 92)
     print("ALL CHECKS PASSED" if ok else "SOMETHING FAILED, STOP HERE")

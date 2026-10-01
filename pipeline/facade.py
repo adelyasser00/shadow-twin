@@ -75,7 +75,8 @@ def sun_vector(altitude_deg: float, azimuth_deg: float):
 
 
 def wall_samples(built: np.ndarray, heights: np.ndarray, labels: np.ndarray,
-                 cellsize: float, levels: int = 4, log=print):
+                 cellsize: float, levels: int = 4, log=print,
+                 window: tuple | None = None, keep_labels=None):
     """
     Find points on building walls, with an outward normal for each.
 
@@ -86,11 +87,34 @@ def wall_samples(built: np.ndarray, heights: np.ndarray, labels: np.ndarray,
     Each wall cell contributes `levels` sample points spaced up its height, so
     a tower reports its base and its crown separately. That split is the whole
     point, because in a dense city they get completely different amounts of sun.
+
+    window       (r0, r1, c0, c1): only walls inside it are sampled. The
+                 normals are still worked out with a few cells of context
+                 around it, so a wall on the window edge faces the right way.
+    keep_labels  optional boolean array indexed by label; walls of other
+                 buildings are skipped.
+
+    Normals are in grid terms: "ne" along +col, "nn" along -row. On a rotated
+    grid, per_building turns them back into compass bearings.
     """
     from scipy import ndimage
 
-    inner = ndimage.binary_erosion(built, structure=np.ones((3, 3)))
-    wall = built & ~inner
+    H, W = built.shape
+    r0, r1, c0, c1 = window if window is not None else (0, H, 0, W)
+    pad = 6
+    p0, p1 = max(0, r0 - pad), min(H, r1 + pad)
+    q0, q1 = max(0, c0 - pad), min(W, c1 + pad)
+    b = built[p0:p1, q0:q1]
+
+    inner = ndimage.binary_erosion(b, structure=np.ones((3, 3)))
+    wall = b & ~inner
+    # Only walls inside the window proper.
+    wall[: r0 - p0, :] = False
+    wall[r1 - p0:, :] = False
+    wall[:, : c0 - q0] = False
+    wall[:, c1 - q0:] = False
+    if keep_labels is not None:
+        wall &= keep_labels[labels[p0:p1, q0:q1]]
     rows, cols = np.nonzero(wall)
     if rows.size == 0:
         return None
@@ -98,11 +122,13 @@ def wall_samples(built: np.ndarray, heights: np.ndarray, labels: np.ndarray,
 
     # Outward normal from the mask gradient. Smoothing first keeps the normal
     # stable along a straight facade instead of flipping cell to cell.
-    m = ndimage.gaussian_filter(built.astype(np.float32), sigma=1.2)
+    m = ndimage.gaussian_filter(b.astype(np.float32), sigma=1.2)
     gy, gx = np.gradient(m)
     # Gradient climbs toward solid, so flip it to face outward.
     ne = -gx[rows, cols]
-    nn = gy[rows, cols]          # +row is south, so -grad_row is north
+    nn = gy[rows, cols]          # +row is grid down, so -grad_row is grid up
+    rows = rows + p0
+    cols = cols + q0
     norm = np.hypot(ne, nn)
     ok = norm > 1e-6
     rows, cols, ne, nn, norm = rows[ok], cols[ok], ne[ok], nn[ok], norm[ok]
@@ -126,8 +152,8 @@ def wall_samples(built: np.ndarray, heights: np.ndarray, labels: np.ndarray,
 
 
 def solve(pts, surface: np.ndarray, ground: np.ndarray, cellsize: float,
-          positions, labels_hours, max_march_m: float = 1500.0, log=print,
-          labels_grid: np.ndarray | None = None):
+          positions, labels_hours, max_march_m: float = 2500.0, log=print,
+          labels_grid: np.ndarray | None = None, bearing_deg: float = 0.0):
     """
     Direct sun hours and clear-sky solar gain for every wall sample point.
 
@@ -148,7 +174,11 @@ def solve(pts, surface: np.ndarray, ground: np.ndarray, cellsize: float,
          its own inner corner.
 
     verify_facade.py checks this on an isolated rotated tower, where every wall
-    that faces the sun must be lit for every hour it faces it.
+    that faces the sun must be lit for every hour it faces it, on a north-up
+    grid and on a grid turned to the tower.
+
+    bearing_deg is the true bearing of the grid's "up". The sun is turned into
+    grid terms with it, the same way the ground sweep does.
 
     Only the direct beam is modelled. Diffuse sky light and light reflected off
     other buildings also reach a wall, including a north wall that never sees the
@@ -168,11 +198,20 @@ def solve(pts, surface: np.ndarray, ground: np.ndarray, cellsize: float,
     rs = r0 - pts["nn"] * 1.0
     cs = c0 + pts["ne"] * 1.0
     self_skip = max(2, int(round(6.0 / cellsize)))
+    # The LiDAR surface keeps the highest return in each cell, so every roof
+    # bleeds about one cell past its walls, and footprints and LiDAR disagree
+    # by a metre or so. Read literally, each wall sits behind a sliver of its
+    # own roof and never sees the sun. So nothing in the first few metres in
+    # front of a wall counts as a blocker. A real street is far wider.
+    edge_skip = max(1, int(round(EDGE_SKIP_M / cellsize)))
+    # The top of the surface, once. Taking it inside the march cost a full
+    # pass over the domain for every step of every hour.
+    smax = float(surface.max())
 
     for k, p in enumerate(positions):
         if p.altitude <= 0.5:
             continue
-        se, sn, su = sun_vector(p.altitude, p.azimuth)
+        se, sn, su = sun_vector(p.altitude, (p.azimuth - bearing_deg) % 360.0)
         cos_aoi = pts["ne"] * se + pts["nn"] * sn
         faces = cos_aoi > 0.0
         idx = np.nonzero(faces)[0]
@@ -182,7 +221,10 @@ def solve(pts, surface: np.ndarray, ground: np.ndarray, cellsize: float,
         hz = math.hypot(se, sn)
         de, dn = se / hz, sn / hz               # unit horizontal sun direction
         tan_alt = math.tan(math.radians(p.altitude))
-        steps = int(max_march_m / cellsize)
+        # No ray needs to go further than it takes to climb over the top of
+        # the surface from the lowest sample.
+        climb = (smax - float(z0.min())) / max(tan_alt, 1e-6)
+        steps = int(min(max_march_m, climb) / cellsize) + 2
 
         blocked = np.zeros(idx.size, dtype=bool)
         alive = np.ones(idx.size, dtype=bool)
@@ -198,13 +240,15 @@ def solve(pts, surface: np.ndarray, ground: np.ndarray, cellsize: float,
                 break
             ray_z = zz0 + (n + 1.0) * cellsize * tan_alt
             sel = np.nonzero(inside)[0]
+            if n < edge_skip:
+                continue
             hit = surface[rr[sel], cc[sel]] > ray_z[sel]
             if labels_grid is not None and n < self_skip:
                 hit &= labels_grid[rr[sel], cc[sel]] != oo[sel]
             blocked[sel[hit]] = True
             alive &= ~blocked
             # Points whose ray has climbed above everything can stop early.
-            alive[sel[ray_z[sel] > surface.max()]] = False
+            alive[sel[ray_z[sel] > smax]] = False
             if not alive.any():
                 break
 
@@ -222,10 +266,12 @@ def solve(pts, surface: np.ndarray, ground: np.ndarray, cellsize: float,
             "gain_wh_m2": gain}
 
 
+EDGE_SKIP_M = 4.0
+
 ORIENTS = [("N", 0.0), ("E", 90.0), ("S", 180.0), ("W", 270.0)]
 
 
-def per_building(pts, res, n_labels: int):
+def per_building(pts, res, n_labels: int, bearing_deg: float = 0.0):
     """
     Roll wall samples up to one record per building part.
 
@@ -245,8 +291,9 @@ def per_building(pts, res, n_labels: int):
     sun = res["sun_hours"]
     gain = res["gain_wh_m2"]
 
-    # Compass bearing each wall faces, from its outward normal.
-    bearing = (np.degrees(np.arctan2(pts["ne"], pts["nn"])) + 360.0) % 360.0
+    # Compass bearing each wall faces, from its outward normal. The normal is
+    # in grid terms, so add the grid's own bearing to get back to the compass.
+    bearing = (np.degrees(np.arctan2(pts["ne"], pts["nn"])) + bearing_deg + 360.0) % 360.0
 
     def roll(sel):
         s = np.zeros(n_labels + 1, dtype=np.float32)

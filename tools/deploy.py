@@ -4,20 +4,24 @@ Build a folder ready to drag onto Cloudflare Pages.
     python tools/deploy.py
 
 Makes deploy/ containing:
-    index.html   the "today" build, so the bare URL works
-    2017.html    the 2017 survey build, for the comparison
-    preview.png  link-preview image, if you put one in viewer/
+    index.html          the "today" build, so the bare URL works
+    2017.html           the 2017 survey build, for the comparison
+    frames-today/       images for the today build, if it was split
+    frames-2017/        images for the 2017 build, if it was split
+    preview.png         link-preview image, if you put one in viewer/
 
-Then go to the Cloudflare dashboard, Workers & Pages, Create, Pages, Upload
-assets, and drag the deploy folder in.
+The shadow-twin-*.html copies are included too, so the comparison finds its
+other half whichever name it asks for.
+
+Then go to the Cloudflare dashboard, Workers & Pages, your project, Create
+deployment, and drag the deploy folder in. Refreshing does not update the
+site; only a new deployment does.
 
 Limits worth knowing: 25 MiB per file and 1,000 files for a drag-and-drop
-deployment. This folder is three files and about a megabyte, so neither is
-close. Static requests are free and unlimited.
+deployment. A whole-park build is a couple of hundred files, well inside both.
 
 Do NOT include viewer/vendor/. It is 23 MB of Cesium in thousands of files, and
-the published page falls back to the Cesium CDN anyway, which serves it faster
-than a static host will.
+the published page falls back to the Cesium CDN anyway.
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ WANT = [("shadow-twin-today.html", "index.html", True),
         ("shadow-twin-today.html", "shadow-twin-today.html", False),
         ("shadow-twin-2017.html", "shadow-twin-2017.html", False),
         ("preview.png", "preview.png", False)]
+FOLDERS = ["frames-today", "frames-2017"]
 
 
 def main():
@@ -48,22 +53,31 @@ def main():
             shutil.copy(p, os.path.join(OUT, dst))
             mb = os.path.getsize(p) / 1e6
             flag = "  OVER 25 MiB, will be rejected" if mb > 25 else ""
-            print(f"  {dst:<14} {mb:6.2f} MB   from {src}{flag}")
+            print(f"  {dst:<24} {mb:6.2f} MB   from {src}{flag}")
         elif required:
             missing.append(src)
         else:
-            print(f"  {dst:<14} skipped, no {src} in viewer/")
+            print(f"  {dst:<24} skipped, no {src} in viewer/")
+
+    for folder in FOLDERS:
+        p = os.path.join(VIEWER, folder)
+        if os.path.isdir(p):
+            shutil.copytree(p, os.path.join(OUT, folder))
+            files = os.listdir(p)
+            mb = sum(os.path.getsize(os.path.join(p, f)) for f in files) / 1e6
+            print(f"  {folder + '/':<24} {mb:6.2f} MB   {len(files)} images")
 
     if missing:
         raise SystemExit(
             "missing " + ", ".join(missing) + "\n"
-            "Run the scenarios first and copy each build:\n"
+            "Run both scenarios first; build_viewer names each build for you:\n"
             "  python -m pipeline.run_nyc ... --burn-footprints\n"
-            "  python -m pipeline.build_viewer\n"
-            "  copy viewer\\shadow-twin.html viewer\\shadow-twin-today.html")
+            "  python -m pipeline.build_viewer")
 
-    total = sum(os.path.getsize(os.path.join(OUT, f)) for f in os.listdir(OUT))
-    print(f"\n{len(os.listdir(OUT))} files, {total/1e6:.2f} MB total")
+    n_files = sum(len(fs) for _, _, fs in os.walk(OUT))
+    total = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(OUT) for f in fs)
+    print(f"\n{n_files} files, {total/1e6:.2f} MB total"
+          + ("   OVER the 1,000 file limit" if n_files > 1000 else ""))
     print(f"drag this folder onto Cloudflare Pages:\n  {OUT}")
     return 0
 

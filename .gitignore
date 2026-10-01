@@ -12,6 +12,7 @@ package.json
 # Solver output. Regenerate with run_nyc, do not version it.
 viewer/data.json
 viewer/shadow-twin*.html
+viewer/frames-*/
 
 # Python
 __pycache__/

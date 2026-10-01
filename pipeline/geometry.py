@@ -110,6 +110,67 @@ def _ray_offsets(azimuth_deg: float, n_steps: int) -> list[tuple[int, int, float
     return out
 
 
+def sweep(
+    dsm: np.ndarray,
+    cellsize: float,
+    altitude_deg: float,
+    azimuth_deg: float,
+    window: tuple | None = None,
+    max_distance_m: float | None = None,
+    max_steps: int = 4000,
+) -> np.ndarray:
+    """
+    Binary sunlit mask for the cells inside `window`, marching through `dsm`.
+
+    window   (r0, r1, c0, c1). Only these cells get an answer, but the march
+             reads the whole surface, so buildings outside the window still
+             cast shadows into it. This is what the buffer is for. None means
+             the whole array, which is the original behaviour exactly.
+
+    azimuth_deg is relative to the grid's "up" direction. On a north-up grid
+    that is the compass azimuth; on a rotated grid, see Grid.azimuth_to_grid.
+
+    Each step compares whole sub-arrays in place, so there is no per-step
+    allocation. Cells whose neighbour at that offset would fall off the surface
+    see nothing there, which is the same as the old NODATA fill.
+    """
+    H, W = dsm.shape
+    r0, r1, c0, c1 = window if window is not None else (0, H, 0, W)
+    fr = dsm[r0:r1, c0:c1]
+    if altitude_deg <= 0.0:
+        return np.zeros(fr.shape, dtype=np.float32)
+
+    # Beyond this distance nothing on the surface is tall enough to reach the
+    # ray from the lowest cell in the window, so the sweep can stop.
+    relief = float(np.nanmax(dsm) - np.nanmin(fr))
+    tan_alt = math.tan(math.radians(altitude_deg))
+    reach = relief / max(tan_alt, 1e-6)
+    if max_distance_m is not None:
+        reach = min(reach, max_distance_m)
+    n_steps = int(math.ceil(reach / cellsize)) + 1
+    n_steps = max(1, min(n_steps, max_steps))
+
+    blocked = np.zeros(fr.shape, dtype=bool)
+    ray = np.empty(fr.shape, dtype=np.float32)
+    hit = np.empty(fr.shape, dtype=bool)
+    for row_off, col_off, dist_cells in _ray_offsets(azimuth_deg, n_steps):
+        # Neighbour rows and columns for every window cell, clipped to dsm.
+        a0, a1 = max(r0 + row_off, 0), min(r1 + row_off, H)
+        b0, b1 = max(c0 + col_off, 0), min(c1 + col_off, W)
+        if a0 >= a1 or b0 >= b1:
+            continue
+        wr0, wr1 = a0 - row_off - r0, a1 - row_off - r0
+        wc0, wc1 = b0 - col_off - c0, b1 - col_off - c0
+        rsub = ray[wr0:wr1, wc0:wc1]
+        hsub = hit[wr0:wr1, wc0:wc1]
+        np.add(fr[wr0:wr1, wc0:wc1], np.float32(dist_cells * cellsize * tan_alt), out=rsub)
+        np.greater(dsm[a0:a1, b0:b1], rsub, out=hsub)
+        bsub = blocked[wr0:wr1, wc0:wc1]
+        np.logical_or(bsub, hsub, out=bsub)
+
+    return (~blocked).astype(np.float32)
+
+
 def cast_shadow(
     dsm: np.ndarray,
     cellsize: float,
@@ -118,7 +179,7 @@ def cast_shadow(
     max_distance_m: float | None = None,
 ) -> np.ndarray:
     """
-    Binary sunlit mask for one instant.
+    Binary sunlit mask for one instant, over the whole array.
 
     Returns a float array where 1.0 means the pixel receives direct sun and
     0.0 means it is shaded by something inside the domain. Below the horizon
@@ -127,28 +188,11 @@ def cast_shadow(
     dsm            surface height in metres, buildings and vegetation included
     cellsize       ground size of one pixel in metres
     altitude_deg   solar altitude, degrees above horizon
-    azimuth_deg    solar azimuth, degrees clockwise from north
+    azimuth_deg    solar azimuth, degrees clockwise from grid up (north on a
+                   north-up grid)
     """
-    if altitude_deg <= 0.0:
-        return np.zeros_like(dsm, dtype=np.float32)
-
-    relief = float(np.nanmax(dsm) - np.nanmin(dsm))
-    tan_alt = math.tan(math.radians(altitude_deg))
-    # Beyond this distance nothing in the domain is tall enough to reach the
-    # ray, so the sweep can stop.
-    reach = relief / max(tan_alt, 1e-6)
-    if max_distance_m is not None:
-        reach = min(reach, max_distance_m)
-    n_steps = int(math.ceil(reach / cellsize)) + 1
-    n_steps = max(1, min(n_steps, 4000))
-
-    blocked = np.zeros(dsm.shape, dtype=bool)
-    for row_off, col_off, dist_cells in _ray_offsets(azimuth_deg, n_steps):
-        ray_height = dsm + dist_cells * cellsize * tan_alt
-        neighbour = _look(dsm, row_off, col_off, NODATA)
-        blocked |= neighbour > ray_height
-
-    return (~blocked).astype(np.float32)
+    return sweep(dsm, cellsize, altitude_deg, azimuth_deg,
+                 max_distance_m=max_distance_m)
 
 
 def sky_view_factor(
@@ -156,6 +200,7 @@ def sky_view_factor(
     cellsize: float,
     n_azimuths: int = 24,
     max_distance_m: float = 300.0,
+    window: tuple | None = None,
 ) -> np.ndarray:
     """
     Radiatively weighted Sky View Factor per pixel, in the range 0 to 1.
@@ -166,19 +211,31 @@ def sky_view_factor(
     max_distance_m  horizon search radius. 300 m is generous for a mid-rise
                     district: a 50 m building at 300 m subtends under 10
                     degrees and contributes under 3 percent to the sum.
+    window          (r0, r1, c0, c1): answer only these cells, reading the
+                    whole surface for the horizon. None is the whole array.
+
+    SVF scans every direction evenly, so it does not care which way the grid
+    faces.
     """
+    H, W = dsm.shape
+    r0, r1, c0, c1 = window if window is not None else (0, H, 0, W)
+    fr = dsm[r0:r1, c0:c1]
     n_steps = int(math.ceil(max_distance_m / cellsize))
-    acc = np.zeros(dsm.shape, dtype=np.float64)
+    acc = np.zeros(fr.shape, dtype=np.float64)
 
     for k in range(n_azimuths):
         azimuth = 360.0 * k / n_azimuths
-        max_tan = np.zeros(dsm.shape, dtype=np.float32)
+        max_tan = np.zeros(fr.shape, dtype=np.float32)
         for row_off, col_off, dist_cells in _ray_offsets(azimuth, n_steps):
-            neighbour = _look(dsm, row_off, col_off, NODATA)
-            rise = neighbour - dsm
-            valid = neighbour > NODATA / 2
-            tan_beta = np.where(valid, rise / (dist_cells * cellsize), 0.0)
-            np.maximum(max_tan, tan_beta, out=max_tan)
+            a0, a1 = max(r0 + row_off, 0), min(r1 + row_off, H)
+            b0, b1 = max(c0 + col_off, 0), min(c1 + col_off, W)
+            if a0 >= a1 or b0 >= b1:
+                continue
+            wr0, wr1 = a0 - row_off - r0, a1 - row_off - r0
+            wc0, wc1 = b0 - col_off - c0, b1 - col_off - c0
+            tan_beta = (dsm[a0:a1, b0:b1] - fr[wr0:wr1, wc0:wc1]) / (dist_cells * cellsize)
+            sub = max_tan[wr0:wr1, wc0:wc1]
+            np.maximum(sub, tan_beta, out=sub)
         np.clip(max_tan, 0.0, None, out=max_tan)
         beta = np.arctan(max_tan)
         acc += np.cos(beta) ** 2
@@ -195,7 +252,7 @@ class DayShadowResult:
     azimuths: list[float]
     sunlit: np.ndarray               # (n_hours, rows, cols), 1 sunlit 0 shaded
     sun_hours: np.ndarray            # (rows, cols), total hours in direct sun
-    svf: np.ndarray                  # (rows, cols), 0 to 1
+    svf: np.ndarray | None           # (rows, cols), 0 to 1, None if skipped
 
 
 def run_day(
@@ -206,33 +263,47 @@ def run_day(
     n_azimuths: int = 24,
     svf_radius_m: float = 300.0,
     progress=None,
+    window: tuple | None = None,
+    bearing_deg: float = 0.0,
+    compute_svf: bool = True,
+    backend=None,
 ) -> DayShadowResult:
     """
-    Cast shadows for every supplied sun position, accumulate sun hours, and
-    compute SVF once.
+    Cast shadows for every supplied sun position and accumulate sun hours.
 
-    positions  a sequence of SunPosition objects from pipeline.solar
-    labels     local clock labels matching positions, same length
+    positions    a sequence of SunPosition objects from pipeline.solar
+    labels       local clock labels matching positions, same length
+    window       frame window inside dsm, see sweep. None is the whole array.
+    bearing_deg  true bearing of the grid's "up". Sun azimuths are turned into
+                 grid terms with it. 0 on a north-up grid.
+    compute_svf  sky view factor is slow and the runner computes it once, not
+                 per day, so it can switch this off.
+    backend      optional callable with sweep's signature, for the GPU path.
 
     Sun hours assume the supplied positions are evenly spaced in time and
     each represents its own interval. Hourly positions give hours directly.
+    Altitudes and azimuths in the result are the true compass values.
     """
     assert len(positions) == len(labels)
+    fn = backend or sweep
     frames = []
     alts, azs = [], []
     for p, lab in zip(positions, labels):
         if progress:
             progress(f"shadow {lab}  alt {p.altitude:5.1f}  az {p.azimuth:6.1f}")
-        frames.append(cast_shadow(dsm, cellsize, p.altitude, p.azimuth))
+        az_grid = (p.azimuth - bearing_deg) % 360.0
+        frames.append(fn(dsm, cellsize, p.altitude, az_grid, window=window))
         alts.append(p.altitude)
         azs.append(p.azimuth)
 
     sunlit = np.stack(frames).astype(np.float32)
     sun_hours = sunlit.sum(axis=0).astype(np.float32)
 
-    if progress:
-        progress(f"sky view factor, {n_azimuths} azimuths, {svf_radius_m:.0f} m radius")
-    svf = sky_view_factor(dsm, cellsize, n_azimuths, svf_radius_m)
+    svf = None
+    if compute_svf:
+        if progress:
+            progress(f"sky view factor, {n_azimuths} azimuths, {svf_radius_m:.0f} m radius")
+        svf = sky_view_factor(dsm, cellsize, n_azimuths, svf_radius_m, window=window)
 
     return DayShadowResult(
         hours=list(labels),
