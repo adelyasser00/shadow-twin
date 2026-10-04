@@ -1,0 +1,8 @@
+# Heat layer: python -m venv .venv-heat, then pip install -r requirements-heat.txt
+# SOLWEIG needs Python 3.11 to 3.13.
+-r requirements.txt
+solweig==0.1.0b96
+# tools/render_post.py drives a headless Chrome over the DevTools protocol
+websocket-client>=1.8
+# The UMEP reference check (V3) needs its own environment, see README:
+#   numpy<2.4  solweig==0.1.0b96  umep==0.0.1b47
