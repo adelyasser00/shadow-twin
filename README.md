@@ -15,10 +15,11 @@ For any patch of ground, at any time on the four CEQR analysis days, it answers:
 - How many hours of direct sun does it get across the day?
 - How much direct sun does each wall of each building get?
 
-**It is not a heat model.** It computes no temperature, no wind and no thermal
-comfort index. Shade is one input to how a place feels. What this computes, it
-computes from measured geometry and calculated sun position, and it stops where
-the data stops.
+**The shade layers are not a heat model.** They compute no temperature, no
+wind and no thermal comfort index. Shade is one input to how a place feels.
+What they compute, they compute from measured geometry and calculated sun
+position, and they stop where the data stops. A separate heat stage adds felt
+temperature on top: see **Heat layer** below.
 
 ---
 
@@ -235,7 +236,8 @@ repository.
 
 ## What it does not do
 
-- No temperature, no wind, no comfort index.
+- No wind in either stage. The shade layers compute no temperature; the heat
+  layers above add felt temperature, with one wind for the whole park.
 - No cloud. These are clear-sky geometric sun hours, so the real figure on any
   given day is lower.
 - Trees in the LiDAR surface are treated as solid. Real canopy lets some light
@@ -249,10 +251,99 @@ repository.
 
 ---
 
-## Planned
+## Heat layer (model estimate, checked)
 
-- Mean radiant temperature, to move from "is it in the sun" to "how does it
-  feel".
+A separate stage asks what people standing in the park feel, not only whether
+they are in the sun: **on a clear December day, how much colder does the south
+end of Central Park feel today than in 2017, because of the buildings that grew
+since?** It reports the change, never the absolute, for the same reason the
+shadow study does.
+
+"Feels like" here is UTCI, the Universal Thermal Climate Index: the air
+temperature that would feel the same to a person in the open. Southern end of
+the park means the 118 ha of park ground within 1.5 km of 59th Street.
+
+| Clear December day, 09:30 to 14:30 EST | |
+|---|---|
+| Feels at least 5 °C colder than in 2017, for an hour or more | 25.7 ha (22%) |
+| Feels at least 10 °C colder, for an hour or more | 2.2 ha |
+| Largest drops, in the towers' shadows | about 12 °C |
+| Worst hour, 14:30: park at least 2 °C colder | 10.7 ha |
+| Same question in June (the control) | 2.8 ha, never 10 °C |
+
+Almost all of it comes from three towers that grew since 2017: Steinway
+Tower at 111 West 57th Street (13.5 ha of park at least 5 °C colder at some
+hour), Central Park Tower (10.6 ha) and 53 West 53rd Street (1.8 ha). The
+effect is strong where it lands and small on average: a given spot is hit for
+about one sampled hour, because tower shadows are thin and move fast.
+
+The checks passed before any number went here: SOLWEIG's shadows match the
+shadow study's own geometry on at least 99.5% of the ground; sun against shade
+on the same lawn differs by about 12 °C of felt temperature, close to published
+measurements; and UMEP's independent reference code, run on the same blocks,
+gives the same change within 0.2 °C. The full list is in
+`data/heat/verify/gates.json` and every number in `data/heat/heat_numbers.csv`.
+
+- **Engine:** SOLWEIG, through UMEP's `solweig` package (0.1.0b96, an
+  experimental release). It computes mean radiant temperature (Tmrt) and the
+  Universal Thermal Climate Index (UTCI) on a 2 m grid, hourly.
+- **Surfaces:** the shadow study's own buildings. Ground from the LiDAR;
+  buildings on footprint cells, measured roofs in 2017 and the same "grown"
+  rule for today. Trees move out of the surface into a canopy layer, treated as
+  deciduous: bare in December (half the sunlight gets through), in leaf in
+  June. Land cover is kept simple: roofs, water, park grass, asphalt.
+- **Grid:** north-up, 2 m, covering Central Park within 1.5 km of 59th Street
+  plus every building whose shadow can reach it on the December CEQR day.
+- **Weather:** the Central Park typical year (TMYx 2011-2025, station 725053,
+  climate.onebuilding.org). The clearest day within 12 days of 21 December, and
+  of 21 June as a control, with a day of spin-up before it.
+- **Time:** Eastern Standard Time, hourly, reported inside the CEQR window
+  (1.5 h after sunrise to 1.5 h before sunset). Weather rows cover the hour
+  before their timestamp, so each hour is shown at its midpoint.
+- **Checks:** `pipeline/verify_heat.py` (a synthetic tower's shadow length,
+  SOLWEIG's shadows against the shadow study's own sweep, physical sanity, a
+  June control) and `tools/heat_crosscheck.py` (GPU against CPU, and the UMEP
+  reference code).
+
+Run it (Python 3.11 to 3.13, in its own environment):
+
+```
+python -m venv .venv-heat
+.venv-heat/Scripts/python -m pip install -r requirements-heat.txt
+.venv-heat/Scripts/python -m pipeline.heat_inputs
+.venv-heat/Scripts/python -m pipeline.heat_weather data/heat/weather/<file>.epw
+.venv-heat/Scripts/python -m pipeline.run_heat --all --cpu
+.venv-heat/Scripts/python -m pipeline.verify_heat
+.venv-heat/Scripts/python tools/heat_crosscheck.py v3b
+.venv-heat/Scripts/python tools/compare_heat.py
+.venv-heat/Scripts/python tools/compare_heat.py --towers
+.venv-heat/Scripts/python -m pipeline.heat_export
+```
+
+The UMEP reference check (V3) runs in a second environment, because the
+`umep` package needs NumPy below 2.4: `python -m venv .venv-umep`, then
+`pip install "numpy<2.4" solweig==0.1.0b96 umep==0.0.1b47` and
+`.venv-umep/Scripts/python tools/heat_crosscheck.py v3`.
+
+In the viewer, **Feels like** and **Colder since 2017** sit next to the shade
+layers, with 3D columns standing on the park. A link can open straight into
+them, for example `shadow-twin.html?layer=change&season=dec&t=14:30`. Post
+images come from `tools/render_post.py` (a headless Chrome rendering the
+viewer, with `python serve.py` running) and `tools/compose_post.py`.
+
+Read every heat number with these:
+
+- One clear typical-year day per season, hourly, through an experimental
+  release of SOLWEIG.
+- "Today" is the 2017 LiDAR with grown buildings raised to their recorded roof
+  over the whole footprint: an upper bound, as in the shadow study.
+- Wind comes from the weather file and is the same everywhere: no downwash at
+  the foot of towers, no wind corridors. Calm hours are raised to 0.5 m/s, the
+  lowest wind UTCI is defined for.
+- Trees come from leaf-on LiDAR and are all treated as deciduous.
+- The model's downwelling longwave is known to run high, so absolute Tmrt runs
+  warm. The change between the two years is the result.
+- Hourly steps: a thin tower shadow can cross a spot between two samples.
 
 ---
 
@@ -261,6 +352,9 @@ repository.
 - NYC 2017 topobathymetric LiDAR, via NYC's orthoimagery finder.
 - NYC Building Footprints, NYC Open Data.
 - Central Park boundary polygon.
+- Heat layer: Central Park typical meteorological year, TMYx 2011-2025,
+  climate.onebuilding.org; SOLWEIG (Lindberg et al.) via UMEP's `solweig`
+  package; UTCI (Blazejczyk et al. 2013).
 
 Methods, data sources and papers are credited in `CREDITS.md`.
 
