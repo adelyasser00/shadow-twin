@@ -1264,7 +1264,7 @@ function wireUp() {
     showCols = !showCols;
     $("tcols").classList.toggle("on", showCols);
     $("tcols").textContent = showCols ? "3D columns on" : "3D columns off";
-    updateColumns(); renderLegend();
+    updateColumns(); updateColumns2(); renderLegend();
   });
 
   $("time").addEventListener("input", e => { stopPlay(); setHour(+e.target.value); });
@@ -1690,6 +1690,29 @@ async function startSplit() {
 
 let src2 = null, overlay2 = null, removeSync = null;
 
+// The comparison pane is its own 3D scene, so it needs its own columns: the
+// other year's felt heatmap, or the same change columns. A primitive cannot
+// be shared between two scenes.
+const colCache2 = new Map();
+function updateColumns2() {
+  if (!viewer2) return;
+  const want = !!HEAT && isHeat() && showCols;
+  const scen = isTodayBuild() ? "y2017" : "today";
+  const key = !want ? null : activeLayer === "felt"
+    ? `felt:${scen}:${heatSeason}:${heatStep}` : `chg:${heatSeason}:${heatStep}`;
+  for (const [k, p] of colCache2) p.show = (k === key);
+  if (!want || colCache2.has(key)) return;
+  if (activeLayer === "felt") {
+    const vals = hstep().felt2 && hstep().felt2[scen];
+    if (!vals || !HEAT.sections) return;
+    colCache2.set(key, viewer2.scene.primitives.add(buildFeltHeatmap(vals)));
+    return;
+  }
+  const cols = hstep().cols;
+  if (!cols || !cols.length) return;
+  colCache2.set(key, viewer2.scene.primitives.add(buildColumns(cols)));
+}
+
 function syncCamera() {
   if (!viewer2) return;
   const c = viewer.camera;
@@ -1740,6 +1763,7 @@ async function refreshSplit() {
       e.polygon.material = buildingColour(DATA2.buildings[e.properties.idx.getValue()]);
     });
   }
+  updateColumns2();
 }
 
 function stopSplit() {
@@ -1753,7 +1777,7 @@ function stopSplit() {
   $("split-line").style.left = "";
   if (removeSync) { removeSync(); removeSync = null; }
   if (viewer2) { viewer2.destroy(); viewer2 = null; }
-  src2 = null; overlay2 = null;
+  src2 = null; overlay2 = null; colCache2.clear();
 }
 
 start().catch(e => {
