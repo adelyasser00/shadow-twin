@@ -13,6 +13,7 @@ package.json
 viewer/data.json
 viewer/shadow-twin*.html
 viewer/frames-*/
+viewer/heat/
 
 # Python
 __pycache__/

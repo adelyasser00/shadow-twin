@@ -8,6 +8,7 @@ Makes deploy/ containing:
     2017.html           the 2017 survey build, for the comparison
     frames-today/       images for the today build, if it was split
     frames-2017/        images for the 2017 build, if it was split
+    heat/               heat layers (heat.json and images), if they were exported
     preview.png         link-preview image, if you put one in viewer/
 
 The shadow-twin-*.html copies are included too, so the comparison finds its
@@ -38,7 +39,7 @@ WANT = [("shadow-twin-today.html", "index.html", True),
         ("shadow-twin-today.html", "shadow-twin-today.html", False),
         ("shadow-twin-2017.html", "shadow-twin-2017.html", False),
         ("preview.png", "preview.png", False)]
-FOLDERS = ["frames-today", "frames-2017"]
+FOLDERS = ["frames-today", "frames-2017", "heat"]
 
 
 def main():

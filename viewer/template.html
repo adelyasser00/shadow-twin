@@ -242,6 +242,7 @@
     <div class="slhead"><span>overlay opacity</span><span class="val" id="opval">100%</span></div>
     <input type="range" id="op" min="0" max="100" step="5" value="100">
   </div>
+  <button class="btn on" id="tcols" style="display:none">3D columns on</button>
   <div class="sec">Buildings</div>
   <div class="dayseg" id="bmode"></div>
   <div class="sl">
@@ -300,6 +301,8 @@
     <button data-layer="shade" class="on">Shade now</button>
     <button data-layer="sunhours">Sun hours</button>
     <button data-layer="svf">Sky view</button>
+    <button data-layer="felt" class="heatbtn" style="display:none">Feels like</button>
+    <button data-layer="change" class="heatbtn" style="display:none">Colder since 2017</button>
   </div>
 </div>
 
@@ -458,6 +461,250 @@ const day = () => DATA.days[dayIndex];
 const hasSvf = () => DATA.svf !== null && DATA.svf !== undefined;
 
 /* ------------------------------------------------------------------ *
+ * Heat layers, optional. heat/heat.json comes from pipeline/heat_export.py.
+ * They have their own days (the clearest typical-year day near each
+ * solstice) and their own hourly steps, so while one is on, the day
+ * buttons and the time slider follow the heat data instead.
+ * ------------------------------------------------------------------ */
+let HEAT = null, heatSeason = 0, heatStep = 0, showCols = true;
+const colCache = new Map();
+const isHeat = () => activeLayer === "felt" || activeLayer === "change";
+const hseason = () => HEAT.seasons[heatSeason];
+const hstep = () => hseason().steps[heatStep];
+const isTodayBuild = () => !!(DATA.model && DATA.model.scenario &&
+                              DATA.model.scenario.type === "today");
+const nSteps = () => isHeat() ? hseason().steps.length : day().hours.length;
+const HEAT_CAVEAT = "Felt temperature is a model estimate (SOLWEIG). One wind for the " +
+  "whole park, typical-year weather, clear day. Read the change, not the absolute.";
+const SHADE_CAVEAT = "Direct sun and shade computed from LiDAR surface geometry. " +
+  "No temperature, no wind, no cloud. This is a shadow model.";
+
+// Fetched once, as soon as the page starts, alongside the map library. Same
+// file name every export, so never a cached copy.
+const _heatFetch = fetch("heat/heat.json", { cache: "no-cache" })
+  .then(r => r.ok ? r.json() : null).catch(() => null);
+
+async function loadHeat() {
+  HEAT = await _heatFetch;
+  if (!HEAT) return false;
+  document.querySelectorAll("#layerseg .heatbtn").forEach(b => b.style.display = "");
+  $("tcols").style.display = "";
+  renderCopy();
+  return true;
+}
+
+// The hour with the most park feeling at least 2 C colder: where to start.
+function worstStep(s) {
+  let best = 0;
+  s.steps.forEach((x, i) => { if (x.ha_colder_2 > s.steps[best].ha_colder_2) best = i; });
+  return best;
+}
+
+function prefetchHeat() {
+  for (const st of hseason().steps) {
+    for (const u of Object.values(st.img)) {
+      if (_warm.has(u)) continue;
+      _warm.add(u);
+      const im = new Image();
+      im.src = u;
+    }
+  }
+}
+
+function changeColour(v) {
+  const L = HEAT.legend.change;
+  for (const e of L) if (v >= e.min && v < e.max) return Cesium.Color.fromCssColorString(e.color);
+  return Cesium.Color.fromCssColorString(v < 0 ? L[0].color : L[L.length - 1].color);
+}
+
+// Columns stand on 10 m squares of the park, height proportional to how much
+// colder it feels there than in 2017. One primitive per hour, built once.
+function buildColumns(cols) {
+  const S = HEAT.columns.section_m * 0.9, k = HEAT.columns.m_per_c;
+  const inst = cols.map(([lon, lat, v]) => {
+    const h = Math.max(1.5, Math.abs(v) * k);
+    return new Cesium.GeometryInstance({
+      geometry: Cesium.BoxGeometry.fromDimensions({
+        vertexFormat: Cesium.PerInstanceColorAppearance.VERTEX_FORMAT,
+        dimensions: new Cesium.Cartesian3(S, S, h) }),
+      modelMatrix: Cesium.Transforms.eastNorthUpToFixedFrame(
+        Cesium.Cartesian3.fromDegrees(lon, lat, h / 2)),
+      attributes: { color: Cesium.ColorGeometryInstanceAttribute.fromColor(
+        changeColour(v).withAlpha(0.9)) },
+      id: { heatColumn: true, v }
+    });
+  });
+  return new Cesium.Primitive({
+    geometryInstances: inst, asynchronous: false,
+    appearance: new Cesium.PerInstanceColorAppearance({ translucent: true, closed: true })
+  });
+}
+
+function feltColour(u) {
+  const L = HEAT.legend.felt;
+  for (const e of L) if (u >= e.min && u < e.max) return Cesium.Color.fromCssColorString(e.color);
+  return Cesium.Color.fromCssColorString(u < L[0].min ? L[0].color : L[L.length - 1].color);
+}
+
+// The felt-temperature 3D heatmap: every 10 m square of the park, coloured by
+// how it feels. Height is thermal stress (degrees outside the UTCI comfort
+// band) above the mildest ground in the park that day, so the harshest spots
+// stand tallest and the mildest lie flat.
+function buildFeltHeatmap(halfDegrees) {
+  const S = HEAT.columns.section_m * 0.9, k = HEAT.columns.felt_m_per_c;
+  const [lo, hi] = HEAT.columns.neutral;
+  const base = hseason().felt_base_stress || 0;
+  const inst = [];
+  HEAT.sections.forEach(([lon, lat], i) => {
+    const u = halfDegrees[i] / 2;
+    const stress = u < lo ? lo - u : (u > hi ? u - hi : 0);
+    const h = Math.max(0.6, (stress - base) * k);
+    inst.push(new Cesium.GeometryInstance({
+      geometry: Cesium.BoxGeometry.fromDimensions({
+        vertexFormat: Cesium.PerInstanceColorAppearance.VERTEX_FORMAT,
+        dimensions: new Cesium.Cartesian3(S, S, h) }),
+      modelMatrix: Cesium.Transforms.eastNorthUpToFixedFrame(
+        Cesium.Cartesian3.fromDegrees(lon, lat, h / 2)),
+      attributes: { color: Cesium.ColorGeometryInstanceAttribute.fromColor(feltColour(u)) },
+      id: { heatFelt: true, u }
+    }));
+  });
+  return new Cesium.Primitive({
+    geometryInstances: inst, asynchronous: false,
+    appearance: new Cesium.PerInstanceColorAppearance({ translucent: false, closed: true })
+  });
+}
+
+function updateColumns() {
+  if (!viewer) return;
+  const want = !!HEAT && isHeat() && showCols;
+  const scen = isTodayBuild() ? "today" : "y2017";
+  const key = !want ? null : activeLayer === "felt"
+    ? `felt:${scen}:${heatSeason}:${heatStep}` : `chg:${heatSeason}:${heatStep}`;
+  for (const [k, p] of colCache) p.show = (k === key);
+  if (!want || colCache.has(key)) return;
+  if (activeLayer === "felt") {
+    const vals = hstep().felt2 && hstep().felt2[scen];
+    if (!vals || !HEAT.sections) return;
+    colCache.set(key, viewer.scene.primitives.add(buildFeltHeatmap(vals)));
+    return;
+  }
+  const cols = hstep().cols;
+  if (!cols || !cols.length) return;
+  colCache.set(key, viewer.scene.primitives.add(buildColumns(cols)));
+}
+
+// Heat colours read best against plain buildings. Wall colouring comes back
+// when you leave the heat layers.
+let savedBuildMode = null;
+function heatBuildings(entering) {
+  if (!hasFacades()) return;
+  if (entering) { savedBuildMode = buildMode; buildMode = "flat"; }
+  else if (savedBuildMode) { buildMode = savedBuildMode; savedBuildMode = null; }
+  document.querySelectorAll("#bmode button").forEach(o =>
+    o.classList.toggle("on", o.dataset.bm === buildMode));
+  recolourBuildings();
+}
+
+function pointInRing(pt, ring) {
+  const [x, y] = pt;
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+
+function towerFor(b) {
+  if (!HEAT || !HEAT.towers || !b.ring) return null;
+  return HEAT.towers.find(t => pointInRing(t.lonlat, b.ring)) || null;
+}
+
+function renderDaySeg() {
+  const items = isHeat()
+    ? HEAT.seasons.map(s => s.control ? `${s.short} (control)` : s.short)
+    : DATA.days.map(d => d.short);
+  const cur = isHeat() ? heatSeason : dayIndex;
+  $("dayseg").innerHTML = items
+    .map((t, i) => `<button data-day="${i}"${i === cur ? ' class="on"' : ""}>${t}</button>`).join("");
+  document.querySelectorAll("#dayseg button").forEach(b =>
+    b.addEventListener("click", () => { stopPlay(); setDay(+b.dataset.day); }));
+}
+
+function renderHeatLegend() {
+  const s = hseason(), st = hstep();
+  const row = (c, a, b) => `<div class="row"><span class="sw" style="background:${c}"></span>` +
+    `${a}${b ? ` <span style="color:#79828f;font-size:9.5px">&nbsp;${b}</span>` : ""}</div>`;
+  if (activeLayer === "felt") {
+    const vals = s.steps.flatMap(x => [x.park_felt_today_c, x.park_felt_2017_c]);
+    const lo = Math.min(...vals) - 8, hi = Math.max(...vals) + 8;
+    let last = null;
+    const rows = HEAT.legend.felt.filter(e => e.max > lo && e.min < hi).reverse().map(e => {
+      const lab = e.label !== last ? e.label : "";
+      last = e.label;
+      return row(e.color, `${e.min} to ${e.max} &deg;C`, lab);
+    });
+    $("legtitle").textContent = "Feels like";
+    $("legunits").textContent = `UTCI at body height, ${isTodayBuild() ? "today" : "2017"}, ` +
+      `${s.label.toLowerCase()}, ${st.time} EST`;
+    $("legrows").innerHTML = rows.join("") + columnsNote();
+  } else {
+    const rows = HEAT.legend.change.slice().reverse().filter(e => e.max <= 2.01 || e.min < 4)
+      .map(e => e.max <= 0.5
+        ? row(e.color, `${-e.max} to ${-e.min} &deg;C colder`)
+        : row(e.color, `${e.min} to ${e.max} &deg;C warmer`));
+    $("legtitle").textContent = "Colder since 2017";
+    $("legunits").textContent = `feels-like, today minus 2017, same hour and weather, ${st.time} EST`;
+    $("legrows").innerHTML = rows.join("") + columnsNote();
+  }
+}
+
+function columnsNote() {
+  if (!showCols) return "";
+  const c = HEAT.columns;
+  const txt = activeLayer === "felt"
+    ? `3D: each ${c.section_m} m square of the park, ${c.felt_m_per_c} m tall for every &deg;C
+       it feels harsher than the mildest ground in the park that day. Tallest = harshest.`
+    : `Columns: ${c.section_m} m squares of the park, ${c.m_per_c} m tall per &deg;C colder
+       than in 2017.`;
+  const grown = HEAT.towers && HEAT.towers.length
+    ? `<div class="row" style="margin-top:6px"><span class="sw" style="background:${GROWN_CSS}"></span>
+       grew since 2017 and shades the park</div>` : "";
+  return grown + `<div style="margin-top:8px;color:#79828f;font-size:9.5px;line-height:1.5">${txt}</div>`;
+}
+
+function renderHeatStats() {
+  const s = hseason(), st = hstep(), sum = s.summary || {};
+  const today = isTodayBuild();
+  let rows;
+  if (activeLayer === "felt") {
+    rows = [
+      ["Park feels like now", fmt(today ? st.park_felt_today_c : st.park_felt_2017_c, 1) + " &deg;C"],
+      [today ? "Same hour in 2017" : "Same hour today",
+       fmt(today ? st.park_felt_2017_c : st.park_felt_today_c, 1) + " &deg;C"],
+      ["Air temperature", fmt(st.air_c, 1) + " &deg;C"],
+      ["Wind", fmt(st.wind_m_s, 1) + " m/s"]
+    ];
+  } else {
+    rows = [
+      ["Park 2 &deg;C+ colder now", fmt(st.ha_colder_2, 1) + " ha"],
+      ["Park 5 &deg;C+ colder now", fmt(st.ha_colder_5, 1) + " ha"],
+      ["Biggest drop now", fmt(st.biggest_drop_c, 1) + " &deg;C"],
+      ["5 &deg;C+ colder at some hour", sum["ha_any_hour_le_-5"] === undefined ? "--"
+        : `${fmt(sum["ha_any_hour_le_-5"], 1)} of ${fmt(sum.report_ha, 0)} ha`]
+    ];
+  }
+  $("statshead").textContent = s.label;
+  $("statstable").innerHTML = rows
+    .map(([k, v]) => `<tr><td class="k">${k}</td><td class="v">${v}</td></tr>`).join("");
+  $("statscope").innerHTML = `Central Park within 1.5 km of 59th Street, ground only ` +
+    `(${fmt(HEAT.area_ha, 0)} ha). Median over the park. ` +
+    (HEAT.status.validated ? "Checked against the shadow model and UMEP's reference code."
+                           : "<b>Model estimate, validation pending.</b>");
+}
+
+/* ------------------------------------------------------------------ *
  * Copy
  * ------------------------------------------------------------------ */
 function renderCopy() {
@@ -471,9 +718,7 @@ function renderCopy() {
   $("hdrsub").textContent =
     `${size} at ${s.cellsize_m} m per cell \u00b7 ` +
     `tallest object in frame ${s.tallest_m} m (${s.tallest_ft} ft) \u00b7 looking up the avenues`;
-  $("hdrcav").textContent =
-    "Direct sun and shade computed from LiDAR surface geometry. " +
-    "No temperature, no wind, no cloud. This is a shadow model.";
+  $("hdrcav").textContent = isHeat() ? HEAT_CAVEAT : SHADE_CAVEAT;
   $("hdrby").innerHTML =
     `built by <b>Adel</b> &middot; <a id="openabout">how it works and what it is not</a>`
     + ` &middot; <a href="https://github.com/adelyasser00/shadow-twin" target="_blank" rel="noopener">source</a>`;
@@ -578,21 +823,64 @@ function renderCopy() {
     are directly comparable. Pixels stay square when you zoom because smoothing
     them would imply detail that is not in the survey.</p>
 
+    ${HEAT ? heatAbout() : ""}
+
     <div class="k">Generated</div>
     <p><code>${DATA.generated_utc}</code></p>`;
+}
+
+function heatAbout() {
+  const st = HEAT.status;
+  const dec = HEAT.seasons.find(s => s.id === "dec");
+  return `
+    <div class="k">Heat layers: ${st.validated ? "checked" : "model estimate, validation pending"}</div>
+    <p><b>Feels like</b> is the Universal Thermal Climate Index (UTCI): the air
+    temperature that would feel the same to a person standing in the open with a
+    light breeze. It combines air temperature, humidity and wind from the weather
+    station with the sunlight and heat reaching the body, at body height (1.1 m).
+    The categories in the legend are the standard UTCI stress scale.</p>
+    <p><b>Colder since 2017</b> is today minus 2017, at the same hour, in the same
+    weather. Only the buildings differ, so the change is the towers' doing. The
+    columns stand on ${HEAT.columns.section_m} m squares of the park,
+    ${HEAT.columns.m_per_c} m tall for every degree it feels colder.</p>
+    <p>Computed with SOLWEIG (UMEP's solweig package) on a 2 m grid from the same
+    buildings as the shadow layers. Trees are a see-through canopy: bare in December,
+    so half the sunlight passes. Weather: the Central Park typical year
+    (${HEAT.weather.station}, WMO ${HEAT.weather.wmo}), on the clearest day within 12 days of
+    each solstice${dec ? ` (December: ${dec.date.slice(5)} of a typical year)` : ""}. June is a
+    control: the new towers stand south of the park, and the high summer sun keeps
+    their shadows short.</p>
+    <ul>
+      <li>One wind speed for the whole park, from the weather file. Gusts at the foot
+          of towers and shelter behind them are not modelled yet.</li>
+      <li>"Today" raises grown buildings to their recorded roof over the whole
+          footprint: an upper bound, as in the shadow layers.</li>
+      <li>Absolute values run a little warm (a known bias of the model's sky
+          radiation). The change between the years is the result.</li>
+      <li>Hourly steps: a thin tower shadow can pass a spot between two samples.</li>
+    </ul>`;
 }
 
 /* ------------------------------------------------------------------ *
  * Overlay
  * ------------------------------------------------------------------ */
 function currentImage() {
+  if (isHeat()) {
+    const im = hstep().img;
+    if (activeLayer === "change") return im.change;
+    return isTodayBuild() ? im.today : im.y2017;
+  }
   if (activeLayer === "shade") return day().hours[hourIndex].png;
   if (activeLayer === "sunhours") return day().sunhours.png;
   return DATA.svf ? DATA.svf.png : day().sunhours.png;
 }
 
+// Image loads are asynchronous, so a quick layer switch can finish out of
+// order. Only the newest request may replace the overlay.
+let _overlaySeq = 0;
 async function drawOverlay() {
-  const b = DATA.site.bounds;
+  const my = ++_overlaySeq;
+  const b = isHeat() ? HEAT.bounds : DATA.site.bounds;
   const rect = Cesium.Rectangle.fromDegrees(b.west, b.south, b.east, b.north);
   const url = currentImage();
   let provider;
@@ -601,6 +889,7 @@ async function drawOverlay() {
   } else {
     provider = new Cesium.SingleTileImageryProvider({ url, rectangle: rect });
   }
+  if (my !== _overlaySeq) return;
   const next = viewer.imageryLayers.addImageryProvider(provider);
   next.alpha = opacity;
   next.magnificationFilter = Cesium.TextureMagnificationFilter.NEAREST;
@@ -635,7 +924,12 @@ function buildingGeoJson() {
 // the eye reads them as the rest of the city and not as part of the result.
 const CONTEXT_CSS = "#7d8590";
 
+const GROWN_CSS = "#f5c451";   // heat views: the buildings that grew since 2017
+
 function buildingColour(b) {
+  if (HEAT && isHeat() && towerFor(b)) {
+    return Cesium.Color.fromCssColorString(GROWN_CSS).withAlpha(buildOpacity);
+  }
   if (b.context) {
     return Cesium.Color.fromCssColorString(CONTEXT_CSS).withAlpha(buildOpacity);
   }
@@ -720,6 +1014,7 @@ function renderBuildingLegend() {
 }
 
 function renderLegend() {
+  if (isHeat()) return renderHeatLegend();
   if (activeLayer === "shade") {
     $("legtitle").textContent = "Direct sun";
     $("legunits").textContent = `${day().label} at ${day().hours[hourIndex].hour}`;
@@ -741,6 +1036,7 @@ function renderLegend() {
 }
 
 function renderStats() {
+  if (isHeat()) return renderHeatStats();
   const d = day(), s = d.stats;
   let rows = [], note = "";
   if (activeLayer === "shade") {
@@ -792,6 +1088,13 @@ function renderStats() {
 
 function renderRecBadge() {
   const d = day();
+  if (isHeat()) {
+    const what = activeLayer === "change" ? "colder than in 2017"
+      : `feels like, ${isTodayBuild() ? "today" : "2017"}`;
+    $("recbadge").innerHTML = `<b>Central Park</b> &nbsp; ${what}, ` +
+      `${hseason().label.toLowerCase()} &nbsp; <span>${hstep().time} EST</span>`;
+    return;
+  }
   if (activeLayer === "shade") {
     $("recbadge").innerHTML =
       `<b>${DATA.site.name}</b> &nbsp; ${d.label} &nbsp; <span>${d.hours[hourIndex].hour}</span>`;
@@ -824,18 +1127,35 @@ function placeInfo() {
     Math.max(90, window.innerHeight - bottom - 64) + "px", "important");
 }
 
-function refresh() { drawOverlay(); renderLegend(); renderStats(); renderRecBadge(); updateCompass(true); requestAnimationFrame(placeInfo); refreshSplit(); }
+function refresh() {
+  drawOverlay(); renderLegend(); renderStats(); renderRecBadge(); updateCompass(true);
+  updateColumns();
+  $("hdrcav").textContent = isHeat() ? HEAT_CAVEAT : SHADE_CAVEAT;
+  requestAnimationFrame(placeInfo); refreshSplit();
+}
 
 function setLayer(name) {
   if (name === "svf" && !hasSvf()) return;
+  if ((name === "felt" || name === "change") && !HEAT) return;
+  const wasHeat = isHeat();
   activeLayer = name;
   document.querySelectorAll("#layerseg button").forEach(b =>
     b.classList.toggle("on", b.dataset.layer === name));
-  const timeActive = name === "shade";
+  const timeActive = name === "shade" || isHeat();
   $("timesl").classList.toggle("off", !timeActive);
   $("play").style.opacity = timeActive ? "1" : ".35";
   $("play").style.pointerEvents = timeActive ? "auto" : "none";
   if (!timeActive) stopPlay();
+  if (wasHeat !== isHeat()) {
+    // The heat layers run on their own days and hours.
+    stopPlay();
+    renderDaySeg();
+    heatBuildings(isHeat());
+    $("time").max = nSteps() - 1;
+    if (isHeat()) prefetchHeat();
+    setHour(isHeat() ? Math.min(heatStep, nSteps() - 1) : hourIndex);
+    return;
+  }
   refresh();
 }
 
@@ -853,6 +1173,16 @@ function prefetchDay(d) {
 }
 
 function setDay(i) {
+  if (isHeat()) {
+    const first = heatSeason !== i;
+    heatSeason = i;
+    document.querySelectorAll("#dayseg button").forEach((b, j) =>
+      b.classList.toggle("on", j === i));
+    $("time").max = nSteps() - 1;
+    prefetchHeat();
+    setHour(first ? worstStep(hseason()) : Math.min(heatStep, nSteps() - 1));
+    return;
+  }
   dayIndex = i;
   document.querySelectorAll("#dayseg button").forEach((b, j) =>
     b.classList.toggle("on", j === i));
@@ -865,6 +1195,16 @@ function setDay(i) {
 }
 
 function setHour(i) {
+  if (isHeat()) {
+    heatStep = i;
+    const s = hstep();
+    $("timeval").textContent = s.time;
+    $("sunalt").textContent = "sun " + fmt(s.sun.alt, 1) + "° up";
+    $("sunaz").textContent = fmt(s.sun.az, 0) + "° from N";
+    $("time").value = i;
+    refresh();
+    return;
+  }
   hourIndex = i;
   const h = day().hours[i];
   $("timeval").textContent = h.hour;
@@ -886,7 +1226,8 @@ function togglePlay() {
   playing = true;
   $("play").classList.add("on");
   $("play").textContent = "Stop";
-  playTimer = setInterval(() => setHour((hourIndex + 1) % day().hours.length), 750);
+  playTimer = setInterval(() =>
+    setHour(((isHeat() ? heatStep : hourIndex) + 1) % nSteps()), isHeat() ? 1100 : 750);
 }
 
 function toggleRec() {
@@ -918,11 +1259,13 @@ function homeView() {
 }
 
 function wireUp() {
-  $("dayseg").innerHTML = DATA.days
-    .map((d, i) => `<button data-day="${i}"${i === 0 ? ' class="on"' : ""}>${d.short}</button>`)
-    .join("");
-  document.querySelectorAll("#dayseg button").forEach(b =>
-    b.addEventListener("click", () => { stopPlay(); setDay(+b.dataset.day); }));
+  renderDaySeg();
+  $("tcols").addEventListener("click", () => {
+    showCols = !showCols;
+    $("tcols").classList.toggle("on", showCols);
+    $("tcols").textContent = showCols ? "3D columns on" : "3D columns off";
+    updateColumns(); renderLegend();
+  });
 
   $("time").addEventListener("input", e => { stopPlay(); setHour(+e.target.value); });
   $("play").addEventListener("click", togglePlay);
@@ -999,12 +1342,39 @@ function wireUp() {
     if (e.key === "r" || e.key === "R") toggleRec();
     if (e.key === " ") { e.preventDefault(); togglePlay(); }
     if (e.key === "Escape") { $("about").style.display = "none"; $("pick").style.display = "none"; }
-    if (e.key === "ArrowRight") { stopPlay(); setHour(Math.min(hourIndex + 1, day().hours.length - 1)); }
-    if (e.key === "ArrowLeft") { stopPlay(); setHour(Math.max(hourIndex - 1, 0)); }
+    const cur = isHeat() ? heatStep : hourIndex;
+    if (e.key === "ArrowRight") { stopPlay(); setHour(Math.min(cur + 1, nSteps() - 1)); }
+    if (e.key === "ArrowLeft") { stopPlay(); setHour(Math.max(cur - 1, 0)); }
   });
 
   viewer.screenSpaceEventHandler.setInputAction(click => {
     const picked = viewer.scene.pick(click.position);
+    if (Cesium.defined(picked) && picked.id && picked.id.heatFelt) {
+      const u = picked.id.u;
+      const cat = HEAT.legend.categories.find(c => u >= c.min && u < c.max);
+      $("picktable").innerHTML = [
+        ["This 10 m square feels like", `${fmt(u, 1)} &deg;C`],
+        ["Stress category", cat ? cat.label : "--"],
+        ["Air temperature", `${fmt(hstep().air_c, 1)} &deg;C`],
+        ["At", `${hstep().time} EST, ${isTodayBuild() ? "today" : "2017"}`]
+      ].map(([k, x]) => `<tr><td>${k}</td><td class="v">${x}</td></tr>`).join("");
+      $("picknote").innerHTML = "Feels-like temperature (UTCI) at body height, averaged over the "
+        + "ground in this square. Column height shows how far it is from comfortable. Model estimate.";
+      $("pick").style.display = "block";
+      return;
+    }
+    if (Cesium.defined(picked) && picked.id && picked.id.heatColumn) {
+      const v = picked.id.v;
+      $("picktable").innerHTML = [
+        ["This 10 m square of the park", v < 0 ? `${fmt(-v, 1)} &deg;C colder` : `${fmt(v, 1)} &deg;C warmer`],
+        ["than in 2017, at", `${hstep().time} EST`],
+        ["On", hseason().label.toLowerCase()]
+      ].map(([k, x]) => `<tr><td>${k}</td><td class="v">${x}</td></tr>`).join("");
+      $("picknote").innerHTML = "Feels-like temperature (UTCI) averaged over the ground in this square. "
+        + "Same weather in both years; only the buildings differ. Model estimate.";
+      $("pick").style.display = "block";
+      return;
+    }
     if (!Cesium.defined(picked) || !picked.id || !picked.id.properties) {
       $("pick").style.display = "none";
       return;
@@ -1014,6 +1384,14 @@ function wireUp() {
       [`Height above street`,
        `${fmt(b.height, 0)} m / ${fmt(b.height * 3.28084, 0)} ft`],
     ];
+    const tw = towerFor(b);
+    if (tw) {
+      rows.push([`Grown since 2017`, `${fmt(tw.lidar_p99_m, 0)} m &rarr; ${fmt(tw.height_m, 0)} m`]);
+      rows.push([`Park it makes 5 &deg;C+ colder`,
+        `${fmt(tw.dec_ha_any_hour_5, 1)} ha <span style="color:#79828f">Dec</span>`]);
+      rows.push([`Park-hours 5 &deg;C+ colder`,
+        `${fmt(tw.dec_ha_hours_5, 1)} ha-h <span style="color:#79828f">Dec</span>`]);
+    }
     if (b.sun && b.sun[day().id]) {
       const s = b.sun[day().id];
       const maxh = day().facade_hours_max || day().hours.length;
@@ -1035,7 +1413,10 @@ function wireUp() {
     }
     $("picktable").innerHTML = rows
       .map(([k, v]) => `<tr><td>${k}</td><td class="v">${v}</td></tr>`).join("");
-    $("picknote").innerHTML = b.context
+    $("picknote").innerHTML = (tw ? "Park figures: the part of Central Park's south end "
+        + "(within 1.5 km of 59th St) that feels at least 5 &deg;C colder because this tower's "
+        + "new height shades it, on the clear December day. Model estimate. " : "")
+      + (b.context
       ? "Outside the study frame. It is drawn because its shadow reaches in; "
         + "its walls are not scored."
       : b.sun
@@ -1043,7 +1424,7 @@ function wireUp() {
         + "of it, hour by hour. Base and crown are the lower and upper half of "
         + "the sunniest wall. Solar gain is the direct beam under a clear sky, "
         + "an upper bound with no cloud."
-      : "Facade solving was skipped for this run.";
+      : "Facade solving was skipped for this run.");
     $("pick").style.display = "block";
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 }
@@ -1061,6 +1442,10 @@ function wireUp() {
 let _lastHeading = null, sunRay = null, sunDot = null;
 
 function currentSun() {
+  if (isHeat()) {
+    const s = hstep();
+    return { alt: s.sun.alt, az: s.sun.az, label: s.time };
+  }
   const h = day().hours[hourIndex];
   return { alt: h.altitude, az: h.azimuth, label: h.hour };
 }
@@ -1147,15 +1532,53 @@ async function start() {
   $("tsplit").style.opacity = ".4";
   $("tsplit").title = "Loading the other build";
 
+  // A link straight into a heat layer (?layer=felt or ?layer=change) builds the
+  // buildings in their heat colours from the start, so nothing is rebuilt.
+  const q0 = new URLSearchParams(location.search);
+  const L0 = q0.get("layer");
+  if (L0 === "felt" || L0 === "change") {
+    const h = await _heatFetch;
+    if (h) {
+      HEAT = h;
+      const si = HEAT.seasons.findIndex(s => s.id === q0.get("season"));
+      heatSeason = si >= 0 ? si : 0;
+      heatStep = worstStep(HEAT.seasons[heatSeason]);
+      activeLayer = L0;
+      if (hasFacades()) { savedBuildMode = buildMode; buildMode = "flat"; }
+      document.querySelectorAll("#layerseg button").forEach(b =>
+        b.classList.toggle("on", b.dataset.layer === L0));
+    }
+  }
   renderCopy();
   await addBuildings();
   wireUp();
   addSun();
   viewer.scene.postRender.addEventListener(() => updateCompass(false));
   hourIndex = Math.floor(DATA.days[0].hours.length / 2);
-  setDay(0);
+  if (isHeat()) { $("time").max = nSteps() - 1; setDay(heatSeason); } else setDay(0);
   homeView();
   $("boot").style.display = "none";
+  // Heat layers are optional and live in their own file next to the page.
+  // URL options make the views scriptable for screenshots:
+  //   ?layer=felt|change  &season=dec|jun  &t=14:30  &rec=1  &cols=0
+  loadHeat().then(ok => {
+    if (!ok) return;
+    const q = new URLSearchParams(location.search);
+    if (!isHeat()) {
+      heatStep = worstStep(HEAT.seasons[0]);
+      const si = HEAT.seasons.findIndex(s => s.id === q.get("season"));
+      if (si >= 0) { heatSeason = si; heatStep = worstStep(HEAT.seasons[si]); }
+    }
+    if (q.get("cols") === "0") { showCols = false; $("tcols").classList.remove("on");
+                                 $("tcols").textContent = "3D columns off"; }
+    const L = q.get("layer");
+    if (L === "felt" || L === "change") {
+      setLayer(L);
+      const ti = hseason().steps.findIndex(s => s.time === q.get("t"));
+      if (ti >= 0) setHour(ti);
+    }
+    if (q.get("rec") === "1" && !recMode) toggleRec();
+  });
   // The other build is as big as this one. Fetch it once the scene is up,
   // so the first picture never waits on two downloads.
   loadComparison().then(() => {
@@ -1291,11 +1714,17 @@ function syncCamera() {
 async function refreshSplit() {
   if (!viewer2 || !DATA2) return;
   const d2 = DATA2.days.find(x => x.id === day().id) || DATA2.days[0];
-  let url;
-  if (activeLayer === "shade") url = d2.hours[Math.min(hourIndex, d2.hours.length - 1)].png;
+  let url, bs = DATA2.site.bounds;
+  if (isHeat()) {
+    // Both scenarios live in heat.json: the right pane shows the other year's
+    // felt temperature, or the same change map.
+    const im = hstep().img;
+    url = activeLayer === "change" ? im.change : (isTodayBuild() ? im.y2017 : im.today);
+    bs = HEAT.bounds;
+  }
+  else if (activeLayer === "shade") url = d2.hours[Math.min(hourIndex, d2.hours.length - 1)].png;
   else if (activeLayer === "sunhours") url = d2.sunhours.png;
   else url = DATA2.svf ? DATA2.svf.png : d2.sunhours.png;
-  const bs = DATA2.site.bounds;
   const rect = Cesium.Rectangle.fromDegrees(bs.west, bs.south, bs.east, bs.north);
   const prov = Cesium.SingleTileImageryProvider.fromUrl
     ? await Cesium.SingleTileImageryProvider.fromUrl(url, { rectangle: rect })
