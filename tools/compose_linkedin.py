@@ -201,6 +201,119 @@ def pair_image(n, heat):
     return img
 
 
+# The tower view: the carousel's slide 2 look (title card, named towers with
+# leader lines) on the whole-day change, as the first image of the post.
+HERO_TITLES = {
+    "A": "Three towers do almost all of it",
+    "B": "Where the new towers chill Central Park",
+    "C": "New towers made Central Park feel colder",
+}
+HERO_SUB = ("Blue: park that now feels 5 °C or more colder on a clear December day. "
+            "Amber: towers that grew since 2017.")
+NAMES = [((-73.98102, 40.76644), "Central Park Tower"),
+         ((-73.97756, 40.76496), "Steinway Tower, 111 W 57th"),
+         ((-73.97815, 40.76183), "53 W 53rd")]
+
+
+def tower_name(lonlat):
+    for (lo, la), nm in NAMES:
+        if abs(lo - lonlat[0]) < 0.0005 and abs(la - lonlat[1]) < 0.0004:
+            return nm
+    return None
+
+
+def label_towers(img, meta, towers, keep_out):
+    """Name, height then and now, and park made 5 C colder, for each named tower.
+
+    Each label goes where it hides the least of the picture's story: the blue
+    fingers and the amber towers, counted in the render itself.
+    """
+    import numpy as np
+    a = np.asarray(Image.open(os.path.join(POST, "li_towers_raw.png")).convert("RGB")).astype(int)
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    story = ((b > r + 30) & (b > g + 10)).astype(int) + 4 * ((r > b + 70) & (g > b + 30))
+    f_b, f = font(25, True), font(23)
+    by_pos = {tuple(t["lonlat"]): t for t in towers}
+    placed = list(keep_out)
+    # No label over any named tower's body, roof to street.
+    placed += [(int(t["x"]) - 26, int(t["y"]) - 14, int(t["x"]) + 26, int(t["y"]) + 190)
+               for t in meta["towers"] if t["x"] is not None and tower_name(t["lonlat"])]
+    d = ImageDraw.Draw(img)
+    for t in sorted(meta["towers"], key=lambda t: -by_pos.get(tuple(t["lonlat"]), {}).get("dec_ha_any_hour_5", 0)):
+        info, name = by_pos.get(tuple(t["lonlat"])), tower_name(t["lonlat"])
+        if not info or not name or t["x"] is None:
+            continue
+        x, y = int(t["x"]), int(t["y"])
+        lines = [name, f"{info['lidar_p99_m']:.0f} m → {info['height_m']:.0f} m",
+                 f"{info['dec_ha_any_hour_5']:.1f} ha of park 5 °C+ colder"]
+        bw = int(max(d.textlength(lines[0], font=f_b), max(d.textlength(s_, font=f) for s_ in lines[1:])) + 28)
+        bh = 98
+        cands = [(x - bw // 2, y - bh - 28), (x - bw - 44, y - bh // 2), (x + 44, y - bh // 2),
+                 (x - bw // 2, y - bh - 150), (x - bw - 44, y + 30), (x + 44, y + 30), (x - bw // 2, y + 70),
+                 (x - bw // 2, y + 210), (x + 44, y + 120), (x - bw - 44, y + 120)]
+        box, best = None, None
+        for cx, cy in cands:
+            cx = int(min(max(SAFE[0] - 14, cx), SAFE[2] + 14 - bw))
+            bx = (cx, int(cy), cx + bw, int(cy) + bh)
+            if bx[1] < SAFE[1] or bx[3] > SAFE[3]:
+                continue
+            if not all(bx[2] < q[0] - 8 or bx[0] > q[2] + 8 or bx[3] < q[1] - 8 or bx[1] > q[3] + 8
+                       for q in placed):
+                continue
+            cost = int(story[bx[1]:bx[3], bx[0]:bx[2]].sum()) + 3 * math.hypot(bx[0] + bw / 2 - x, bx[1] + bh / 2 - y)
+            if best is None or cost < best:
+                box, best = bx, cost
+        if box is None:
+            print("no room for", name)
+            continue
+        img = shade(img, box, alpha=218, radius=10)
+        d = ImageDraw.Draw(img)
+        lx = min(max(x, box[0]), box[2])
+        ly = box[3] if y > box[3] else (box[1] if y < box[1] else (box[1] + box[3]) // 2)
+        d.line((lx, ly, x, y), fill=GROWN, width=3)
+        d.ellipse((x - 5, y - 5, x + 5, y + 5), fill=GROWN)
+        d.text((box[0] + 14, box[1] + 8), lines[0], font=f_b, fill=GROWN)
+        d.text((box[0] + 14, box[1] + 41), lines[1], font=f, fill=INK)
+        d.text((box[0] + 14, box[1] + 67), lines[2], font=f, fill=INK)
+        placed.append(box)
+    return img
+
+
+def hero_image(key, n, heat, meta, towers):
+    img = Image.open(os.path.join(POST, "li_towers_raw.png")).convert("RGBA")
+    d = ImageDraw.Draw(img)
+    size = 48                                   # one line if it fits at 40 px or more
+    while size > 40 and d.textlength(HERO_TITLES[key], font=font(size, True)) > 880:
+        size -= 1
+    f_t, f_s = font(size, True), font(25)
+    lt = wrap(d, HERO_TITLES[key], f_t, 880)
+    ls = wrap(d, HERO_SUB.replace("5 °C", "5 °C"), f_s, 880)
+    top = SAFE[1] - 10
+    ys = top + len(lt) * 56 + 6
+    card = (SAFE[0] - 22, top - 18, SAFE[2] + 22, ys + len(ls) * 32 + 14)
+    img = shade(img, card, alpha=222, radius=18)
+    d = ImageDraw.Draw(img)
+    for i, ln in enumerate(lt):
+        d.text((SAFE[0], top + i * 56), ln, font=f_t, fill=INK)
+    for i, ln in enumerate(ls):
+        d.text((SAFE[0], ys + i * 32), ln, font=f_s, fill=MUTED)
+    # The one number, on the east side where it covers only buildings.
+    nb_ = (SAFE[2] - 262, card[3] + 92, SAFE[2] + 14, card[3] + 232)
+    img = shade(img, nb_, alpha=222, radius=14)
+    d = ImageDraw.Draw(img)
+    d.text((SAFE[2], nb_[1] + 2), f"{n['ha5']:.1f} ha", font=font(62, True), fill="#86b6ef", anchor="ra")
+    d.text((SAFE[2], nb_[1] + 78), "feels 5 °C+ colder", font=font(23), fill=INK, anchor="ra")
+    d.text((SAFE[2], nb_[1] + 106), "for an hour or more", font=font(23), fill=INK, anchor="ra")
+    lim = meta["limit"]
+    img = pill(img, (lim[1][0] + 14, lim[1][1]), "model stops here", font(22))
+    img = north_arrow(img, SAFE[2] - 46, nb_[3] + 66, meta["north"])
+    img = source(img)
+    keep_out = [card, nb_, (SAFE[0] - 12, SAFE[3] - len(SOURCE) * 30 - 8, SAFE[2] + 12, SAFE[3] + 4),
+                (SAFE[2] - 92, nb_[3] + 20, SAFE[2] + 2, nb_[3] + 112)]
+    img = label_towers(img, meta, towers, keep_out)
+    return img
+
+
 def save(img, name):
     p = os.path.join(POST, name)
     img.convert("RGB").save(p, format="PNG", optimize=True)
@@ -221,6 +334,12 @@ def main():
         meta = json.load(f)
     for k in HEADLINES:
         save(main_image(k, n, heat, meta), f"linkedin_main_{k}.png")
+    with open(os.path.join(POST, "li_towers_raw.json"), encoding="utf-8") as f:
+        tmeta = json.load(f)
+    with open(os.path.join(HERE, "data", "heat", "compare", "towers.json"), encoding="utf-8") as f:
+        towers = json.load(f)
+    for k in HERO_TITLES:
+        save(hero_image(k, n, heat, tmeta, towers), f"linkedin_towers_{k}.png")
     save(pair_image(n, heat), "linkedin_2017_vs_today.png")
     return 0
 

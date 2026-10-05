@@ -163,9 +163,16 @@ SHOOT = """
   const pt = (lon, lat, h) => { const p = toWin(viewer.scene, Cesium.Cartesian3.fromDegrees(lon, lat, h || 0));
                                 return p ? [p.x, p.y] : null; };
   const o = %(ov)s;
+  // Where each grown tower's roof lands in the picture, for labels.
+  const towers = (HEAT.towers || []).map(t => {
+    const b = DATA.buildings.find(bb => bb.ring && pointInRing(t.lonlat, bb.ring));
+    const hgt = b ? b.height : t.height_m;
+    const p = pt(t.lonlat[0], t.lonlat[1], hgt);
+    return { lonlat: t.lonlat, height_m: hgt, x: p ? p[0] : null, y: p ? p[1] : null };
+  });
   return { png: viewer.canvas.toDataURL('image/png'), w: viewer.canvas.width, h: viewer.canvas.height,
            step: hstep().time, line59: o.line59.map(p => pt(p[0], p[1])), limit: o.limit.map(p => pt(p[0], p[1])),
-           north: [pt(o.mid59[0], o.mid59[1]), pt(o.mid59[0], o.mid59[1] + 0.003)] };
+           north: [pt(o.mid59[0], o.mid59[1]), pt(o.mid59[0], o.mid59[1] + 0.003)], towers };
 })()
 """
 
@@ -195,14 +202,18 @@ def main():
     ov = overlays()
     whole = camera_behind(ov["mid59"], 820, 1500, 28.9, -39.5)
     south = camera_behind(ov["mid59"], 900, 1000, 28.9, -36)
+    # The carousel's tower slide (render_post "topP"): looking up the avenues
+    # from over Midtown, the towers in front and their fingers beyond.
+    towers = {"lat": 40.75640, "lon": -73.98330, "h": 1900, "heading": 28.9, "pitch": -54}
     shots = [
-        # name, page, query, size, camera, hide flat layer, overlays, (saturation, brightness)
-        ("li_main_raw", "shadow-twin.html", "layer=change&season=dec", (1080, 1350), whole, False, True, (0.2, 0.62)),
-        ("li_felt_2017_raw", "shadow-twin-2017.html", "layer=felt&season=dec", (1080, 640), south, True, False, (0.2, 0.62)),
-        ("li_felt_today_raw", "shadow-twin.html", "layer=felt&season=dec", (1080, 640), south, True, False, (0.2, 0.62)),
+        # name, page, query, size, camera, hide flat layer, overlays, (saturation, brightness), muted towers
+        ("li_main_raw", "shadow-twin.html", "layer=change&season=dec", (1080, 1350), whole, False, True, (0.2, 0.62), True),
+        ("li_towers_raw", "shadow-twin.html", "layer=change&season=dec", (1080, 1350), towers, False, True, (0.35, 0.8), False),
+        ("li_felt_2017_raw", "shadow-twin-2017.html", "layer=felt&season=dec", (1080, 640), south, True, False, (0.2, 0.62), False),
+        ("li_felt_today_raw", "shadow-twin.html", "layer=felt&season=dec", (1080, 640), south, True, False, (0.2, 0.62), False),
     ]
     comp = None
-    if not wanted or "li_main_raw" in wanted:
+    if not wanted or wanted & {"li_main_raw", "li_towers_raw"}:
         comp = day_composite()
         print(f"day composite {comp['steps'][0]} to {comp['steps'][-1]}: "
               f"{comp['ha5']:.2f} ha at least 5 C colder", flush=True)
@@ -212,7 +223,7 @@ def main():
     try:
         tab.call("Page.enable")
         tab.call("Runtime.enable")
-        for name, page, query, (w, h), cam, hide, ovl, (sat, bri) in shots:
+        for name, page, query, (w, h), cam, hide, ovl, (sat, bri), mute in shots:
             if wanted and name not in wanted:
                 continue
             tab.call("Emulation.setDeviceMetricsOverride", width=w, height=h, deviceScaleFactor=1, mobile=False)
@@ -221,17 +232,19 @@ def main():
             info = tab.js(WAIT_READY, timeout_s=600)
             if ovl:
                 tab.js(ADD_OVERLAYS % {"ov": json.dumps(ov), "limit": "true"})
+            if mute:
                 # Grown towers in a quieter amber, so the blue fingers lead the eye.
                 tab.js("""(() => { const base = buildingColour;
                   window.buildingColour = b => (HEAT && isHeat() && towerFor(b))
                     ? Cesium.Color.fromCssColorString('#b8955a') : base(b);
                   recolourBuildings(); return true; })()""")
+            if ovl:
                 tab.js(USE_COMPOSITE % {"c": json.dumps({"png": comp["png"], "cols": comp["cols"]})})
             out = tab.js(SHOOT % {"cam": json.dumps(cam), "hide_ground": "true" if hide else "false",
                                   "ov": json.dumps(ov), "sat": sat, "bri": bri}, timeout_s=300)
             with open(os.path.join(OUT, name + ".png"), "wb") as f:
                 f.write(base64.b64decode(out["png"].split(",", 1)[1]))
-            meta = {k: out[k] for k in ("w", "h", "step", "line59", "limit", "north")}
+            meta = {k: out[k] for k in ("w", "h", "step", "line59", "limit", "north", "towers")}
             meta["camera"] = cam
             with open(os.path.join(OUT, name + ".json"), "w", encoding="utf-8", newline="\n") as f:
                 json.dump(meta, f, indent=1)
