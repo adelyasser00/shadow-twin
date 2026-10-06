@@ -64,6 +64,7 @@ MIN_VERTICES = 10
 SLOW = 0.05                             # stop where the wind falls below 5% of Sheep Meadow
 D_SEP_CELLS = 2.4                       # street lines stay about 20 m apart
 TOWER_M = 150.0
+MAX_TOWERS = 12
 
 # Street wind map: ratio to the open lawn, fixed breaks.
 K_BREAKS = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.5, 2.0, 4.0]
@@ -307,25 +308,31 @@ def air_lines(run, u_ref, roi, rng):
     solid = np.unpackbits(run["solid"], axis=-1)[..., :b.nx].astype(bool)[:nz]
     bh = run["building"]
     seeds = []
-    # Towers: columns at least TOWER_M tall inside the study area, one seed rake each.
+    # Towers: the tallest buildings in the study area, at most MAX_TOWERS,
+    # each with a small rake of seeds 80 m upwind: three heights, three
+    # positions across its width. Enough to show air thrown down a tower face
+    # and the wake behind it; more turns into a wall of light.
     tall = (bh >= TOWER_M) & roi
     from scipy import ndimage
     lab, nlab = ndimage.label(tall)
+    towers = []
     for t in range(1, nlab + 1):
         jj, ii = np.nonzero(lab == t)
-        h = float(bh[jj, ii].max())
+        towers.append((float(bh[jj, ii].max()), jj, ii))
+    towers.sort(key=lambda t: -t[0])
+    for h, jj, ii in towers[:MAX_TOWERS]:
         i0, j0 = ii.min(), jj.mean()
         width = max(2.0, jj.max() - jj.min() + 1)
-        for zf in (0.2, 0.35, 0.5, 0.65, 0.8):
-            for dj in np.linspace(-0.9, 0.9, 5):
-                seeds.append((i0 - 6.0, j0 + dj * width * 0.7, run["kfirst"][int(j0), max(0, i0 - 6)] + zf * h / b.res))
-    # The park: a low rake across the whole study area, upwind of it.
+        for zf in (0.3, 0.55, 0.8):
+            for dj in (-0.6, 0.0, 0.6):
+                i_s = max(1, i0 - 10)
+                seeds.append((i_s, j0 + dj * width, run["kfirst"][int(j0), int(i_s)] + zf * h / b.res))
+    # The park: one low rake across the study area, upwind of it.
     jr = np.nonzero(roi.any(axis=1))[0]
     ir = np.nonzero(roi.any(axis=0))[0]
-    for j in np.linspace(jr.min(), jr.max(), 34):
-        for zm in (12.0, 40.0):
-            i = ir.min() + 2
-            seeds.append((i, j, run["kfirst"][int(j), int(i)] + zm / b.res))
+    for j in np.linspace(jr.min(), jr.max(), 24):
+        i = ir.min() + 2
+        seeds.append((i, j, run["kfirst"][int(j), int(i)] + 30.0 / b.res))
     s = np.array(seeds, np.float64)
     dtau = VERTEX_CELLS / u_ref
     sub = 6

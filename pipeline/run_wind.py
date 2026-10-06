@@ -36,7 +36,7 @@ import numpy as np
 from .wind_domain import BOX, LAD, WIND_DIR, load_canvas, voxelise
 from .wind_lbm import InflowTurbulence, Solver, power_profile
 
-RUNS_DIR = os.path.join(WIND_DIR, "runs")
+RUNS_DIR = os.environ.get("WIND_RUNS_DIR") or os.path.join(WIND_DIR, "runs")
 ALPHA = 0.28
 U_TOP = 0.09                    # lattice speed at the lid: Mach 0.16
 SPINUP = 1.0                    # flow-throughs before averaging starts (the box starts at the inlet profile)
