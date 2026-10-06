@@ -174,7 +174,7 @@ def queue(name):
         "2017-lib": [("2017", d, 8.0, BOX, "", "dec", AVERAGE) for d in LIBRARY],
     }
     if name == "all":
-        return [j for k in ("hero", "today-nw", "grid", "june", "today-rest", "2017-lib") for j in q[k]]
+        return [j for k in ("hero", "grid", "today-nw", "june", "today-rest", "2017-lib") for j in q[k]]
     if name not in q:
         raise SystemExit(f"unknown queue {name}; one of {', '.join(q)} or all")
     return q[name]
