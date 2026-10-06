@@ -35,6 +35,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VIEWER = os.path.join(HERE, "viewer")
 OUT_NAME = "shadow-twin.html"
 SPLIT_ABOVE_MB = 6.0
+DATA_FILE_ABOVE_MB = 1.0         # model data bigger than this gets its own file
 
 
 def scenario_tag(d):
@@ -104,6 +105,16 @@ def main():
         folder, n_img, img_bytes = split_images(d, tag)
 
     raw = json.dumps(d, separators=(",", ":"))
+    data_file = None
+    if split or len(raw) > DATA_FILE_ABOVE_MB * 1024 * 1024:
+        # A big build keeps its data next to the page too, so the page stays
+        # small: link previews (LinkedIn reads at most 3 MiB) and a first paint
+        # that is not waiting on the whole model.
+        data_file = f"data-{tag}.json"
+        with open(os.path.join(VIEWER, data_file), "w", encoding="utf-8", newline="\n") as f:
+            f.write(raw)
+        ver = hashlib.sha1(raw.encode()).hexdigest()[:8]
+        raw = json.dumps(f"{data_file}?v={ver}")
     out = html.replace("/*__DATA__*/", raw.replace("</script>", "<\\/script>"))
     written = []
     for name in (OUT_NAME, f"shadow-twin-{tag}.html"):
@@ -119,6 +130,9 @@ def main():
     print(f"wrote {written[0]}")
     print(f"  and {written[1]}")
     print(f"  page        {mb:.2f} MB")
+    if data_file:
+        mb_d = os.path.getsize(os.path.join(VIEWER, data_file)) / 1024 / 1024
+        print(f"  data        {mb_d:.2f} MB in viewer/{data_file}, fetched by the page")
     if split:
         print(f"  images      {n_img} files, {img_bytes/1024/1024:.1f} MB in viewer/{folder}/, "
               "loaded as they are shown")

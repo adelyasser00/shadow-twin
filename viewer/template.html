@@ -312,7 +312,13 @@
 </div>
 
 <script>
-const DATA = /*__DATA__*/;
+// The model data. A small build carries it inline; a big build keeps it in
+// its own file next to the page and this is that file's name. Then the page
+// itself stays a few hundred kB, which link previews need (LinkedIn stops
+// reading at 3 MiB), and the data downloads alongside the map library.
+let DATA = /*__DATA__*/;
+const _dataFetch = typeof DATA !== "string" ? Promise.resolve(DATA)
+  : fetch(DATA).then(r => { if (!r.ok) throw new Error(`${DATA}: ${r.status}`); return r.json(); });
 
 /* ------------------------------------------------------------------ *
  * Cesium loader.
@@ -351,10 +357,11 @@ function loadCesium() {
   });
 }
 
-function bootFail() {
+function bootFail(title, err) {
+  if (err) console.error(err);
   document.getElementById("boot").innerHTML = `<div class="inner">
     <div style="font-size:14px;color:#ffb4a0;margin-bottom:10px">
-      Could not load the map library</div>
+      ${title || "Could not load the map library"}</div>
     <div style="color:#8b94a0;font-size:11.5px;line-height:1.7">
       No internet, or the Cesium CDN is blocked from here.<br><br>
       If you already vendored Cesium, this page must be served over http.<br>
@@ -1518,6 +1525,7 @@ async function start() {
 
   let src;
   try { src = await loadCesium(); } catch (e) { return bootFail(); }
+  try { DATA = await _dataFetch; } catch (e) { return bootFail("Could not load the model data", e); }
   // Only OpenStreetMap tiles and our own overlays are used, never Cesium Ion.
   // This must run after the library has loaded, not before.
   Cesium.Ion.defaultAccessToken = "";
@@ -1613,7 +1621,7 @@ async function loadComparison() {
     for (const u of urls) {
       try {
         const r = await fetch(u);
-        if (r.ok) { text = await r.text(); if (text.includes("const DATA = ")) break; }
+        if (r.ok) { text = await r.text(); if (/(?:const|let) DATA = /.test(text)) break; }
       } catch (_) {}
       text = null;
     }
@@ -1622,13 +1630,18 @@ async function loadComparison() {
     // works whether the file was built with Unix or Windows line endings.
     // Looking for ";\n" failed on every Windows build, because there the
     // line ends in ";\r\n".
-    const start = text.indexOf("const DATA = ");
-    if (start < 0) return;
-    const rest = text.slice(start + 13);
+    const m = /(?:const|let) DATA = /.exec(text);
+    if (!m) return;
+    const rest = text.slice(m.index + m[0].length);
     const nl = rest.indexOf("\n");
     let js = (nl < 0 ? rest : rest.slice(0, nl)).trim();
     if (js.endsWith(";")) js = js.slice(0, -1);
     try { DATA2 = JSON.parse(js); } catch (_) { return; }
+    // A big build names its data file instead; fetch that.
+    if (typeof DATA2 === "string") {
+      const r = await fetch(DATA2);
+      DATA2 = r.ok ? await r.json() : null;
+    }
   } catch (_) { /* comparison file not present, that is fine */ }
 }
 

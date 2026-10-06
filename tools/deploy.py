@@ -6,6 +6,7 @@ Build a folder ready to drag onto Cloudflare Pages.
 Makes deploy/ containing:
     index.html          the "today" build, so the bare URL works
     2017.html           the 2017 survey build, for the comparison
+    data-*.json         each build's model data, when kept off the page
     frames-today/       images for the today build, if it was split
     frames-2017/        images for the 2017 build, if it was split
     heat/               heat layers (heat.json and images), if they were exported
@@ -42,6 +43,8 @@ WANT = [("shadow-twin-today.html", "index.html", True),
         ("shadow-twin-2017.html", "2017.html", False),
         ("shadow-twin-today.html", "shadow-twin-today.html", False),
         ("shadow-twin-2017.html", "shadow-twin-2017.html", False),
+        ("data-today.json", "data-today.json", False),
+        ("data-2017.json", "data-2017.json", False),
         ("preview.png", "preview.png", False)]
 FOLDERS = ["frames-today", "frames-2017", "heat"]
 SITE = os.environ.get("SITE_URL", "https://shadow-twin-adelyasser00.pages.dev").rstrip("/")
