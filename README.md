@@ -236,8 +236,9 @@ repository.
 
 ## What it does not do
 
-- No wind in either stage. The shade layers compute no temperature; the heat
-  layers above add felt temperature, with one wind for the whole park.
+- The shade layers compute no temperature and no wind. The heat layers add
+  felt temperature, and the wind layer adds a simulated wind at each spot; see
+  their own sections for what those do not do.
 - No cloud. These are clear-sky geometric sun hours, so the real figure on any
   given day is lower.
 - Trees in the LiDAR surface are treated as solid. Real canopy lets some light
@@ -344,6 +345,96 @@ Read every heat number with these:
 - The model's downwelling longwave is known to run high, so absolute Tmrt runs
   warm. The change between the two years is the result.
 - Hourly steps: a thin tower shadow can cross a spot between two samples.
+
+---
+
+## Wind layer (model estimate)
+
+The heat layer gave every spot in the park the same wind, the one the weather
+station measured. Wind is anything but uniform in Midtown: towers pull fast
+air down their faces to the street, wakes behind them are calm, avenues
+channel it, and the park's trees slow it. This stage simulates that in 3D,
+plays it back as moving light in the viewer, and feeds the wind at each spot
+back into felt temperature.
+
+- **Solver:** written for this project, `pipeline/wind_lbm.py`. Lattice
+  Boltzmann (D3Q19) with a Smagorinsky large eddy model and regularised
+  collisions, on the GPU through OpenCL. 8 m cells, a box 3.2 by 2.9 km and
+  960 m tall turned under the wind like a wind tunnel turntable, 17 million
+  cells, about 9 minutes per direction on a GTX 1650 laptop GPU.
+- **City:** the heat layer's own LiDAR buildings, and NYC footprints as blocks
+  beyond the survey (for 2017, only those built before 2017). Walls are
+  free-slip with a log-law roughness drag on ground and roofs: at 8 m cells a
+  no-slip wall cannot be resolved and braked the air near the ground 2 to 3
+  times too hard.
+- **Trees:** a porous drag, Cd 0.2 times a leaf area density of 0.5 m2/m3 in
+  leaf and 0.1 bare (branches only).
+- **Directions:** the heat day's northwester (315 degrees) for both years, then
+  the rest of the compass in 22.5 degree steps. Each hour uses the simulated
+  direction nearest the one the weather file reports, as pedestrian wind
+  studies do (NEN 8100).
+- **Speeds:** the simulation gives ratios. The park's open lawns get the
+  weather station's wind; every other spot gets that wind times its simulated
+  ratio. Around sharp-edged buildings the flow pattern does not depend on the
+  speed, only its strength, which is why one run per direction serves every
+  wind speed.
+- **Felt temperature:** UTCI recomputed with SOLWEIG's own UTCI code, from the
+  same radiant temperature, air temperature and humidity, with each cell's own
+  wind (held between 0.5 and 17 m/s, UTCI's range).
+- **Live:** the viewer's "Live now" reads the current wind from Open-Meteo
+  (NOAA's HRRR model), picks the nearest simulated direction and scales it.
+
+First results, the clear December day's northwester, 2017 against today:
+
+| | |
+|---|---|
+| Street wind 20 to 80 m from Central Park Tower | 60% stronger |
+| Around 53 West 53rd Street | 29% stronger |
+| Around Steinway Tower | typical spot unchanged, windiest tenth 39% stronger |
+| Central Park, within 1.5 km of 59th Street | about the same (+1%): the park is upwind of the towers |
+| Park that feels 5 °C+ colder for an hour or more, with the wind at each spot | 19.9 ha (25.7 ha with one wind for the park) |
+
+The towers change the wind mostly at their own feet. The park's winter chill
+is still about shade; with the wind at each spot instead of one wind
+everywhere, the area that feels 5 °C colder shrinks from 25.7 to 19.9 ha.
+Every number is in `data/wind/wind_story.csv` and `data/wind/wind_numbers.csv`.
+
+Checks (`pipeline/verify_wind.py`, thresholds set before the results), in
+`data/wind/verify/gates.json`:
+
+- The recomputed UTCI reproduces SOLWEIG's with the station wind: passes.
+- The two halves of the averaging window agree within 10% at street level:
+  passes for the two December runs every number comes from (8%); the shorter
+  runs behind the live view and the June control reach 10 to 12%.
+- 6 m against 8 m cells on the same box: the park's median wind agrees within
+  6% (passes), but cell by cell the patterns correlate at only 0.69 (fails
+  0.8). Smoothed over 20 m they agree at 0.80, over 40 m at 0.86 (checked
+  after the fact). Read the maps at the scale of a street or a lawn, not a
+  single cell.
+- Wind over the open lawn grows with height like a city wind profile, trees
+  are calmer than lawns, and the strongest street-level speed-ups (2.4 times
+  the lawn at the 99th percentile) stay inside the 2 to 3 times published for
+  the foot of tall buildings: all pass.
+
+Read every wind number with these:
+
+- 8 m cells: right for where towers pull wind down, wakes and sheltered lawns;
+  not for the gust at one corner. This is not a pedestrian wind comfort study.
+- Time-mean wind, not gusts. Neutral air, no heating of the ground.
+- The absolute speed is the least certain number. The Central Park station is
+  known to read low; read ratios and the change since 2017 first.
+
+Run it (same environment as the heat layer, plus `pyopencl`):
+
+```
+.venv-heat/Scripts/python -m pipeline.wind_domain
+.venv-heat/Scripts/python -m pipeline.run_wind --queue all
+.venv-heat/Scripts/python -m pipeline.wind_export
+.venv-heat/Scripts/python -m pipeline.wind_heat
+.venv-heat/Scripts/python -m pipeline.verify_wind
+.venv-heat/Scripts/python tools/wind_qa.py
+.venv-heat/Scripts/python tools/render_wind.py
+```
 
 ---
 
