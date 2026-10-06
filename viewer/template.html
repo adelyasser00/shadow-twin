@@ -757,6 +757,8 @@ let WIND = null, WINDHEAT = null, windLive = null, windLiveMode = false, windLiv
 let windAnim = !(window.matchMedia &&
   matchMedia("(max-width: 760px), (pointer: coarse)").matches);
 let windAir = true, localWind = true, windDensity = 1, windThinned = false;
+// ?full=1 keeps every line, for renders.
+const windFull = new URLSearchParams(location.search).get("full") === "1";
 const WIND_SPEEDUP = 20;
 // Under the moving lines the wind map is a backdrop, not the subject.
 const WIND_MAP_ALPHA = 0.55;
@@ -991,7 +993,7 @@ class WindLines {
         u_phase: () => self.phase,
         u_period: () => air ? 34.0 : 26.0,
         u_speed: () => self.speed,
-        u_base: () => air ? 0.10 : 0.16,
+        u_base: () => air ? 0.08 : 0.16,
         u_width: () => (air ? 1.9 : 1.5) * (window.devicePixelRatio || 1)
       }
     });
@@ -1027,12 +1029,14 @@ function fetchLines(url) {
 }
 
 const windPrims = new Map();
-let _windSeq = 0;
+let windWanted = new Set();
+// Whatever was asked for last decides what shows, so overlapping refreshes
+// (a layer switch, then a jump in time) can never leave the lines hidden.
 async function updateWindLines() {
   const run = viewer && WIND && isWind() && windAnim ? currentWindRun() : null;
   const urls = run ? [run.street].concat(windAir ? [run.air] : []) : [];
-  for (const [u, p] of windPrims) p.show = urls.includes(u);
-  const my = ++_windSeq;
+  windWanted = new Set(urls);
+  for (const [u, p] of windPrims) p.show = windWanted.has(u);
   for (const u of urls) {
     if (windPrims.has(u)) continue;
     let lines;
@@ -1041,7 +1045,7 @@ async function updateWindLines() {
     const p = new WindLines(lines, u.includes("/air_") ? "air" : "street", WIND.origin, WIND.spacing_k1_m);
     p.fraction = windDensity;
     windPrims.set(u, viewer.scene.primitives.add(p));
-    p.show = my === _windSeq ? urls.includes(u) : false;
+    p.show = windWanted.has(u);
   }
 }
 
@@ -1067,7 +1071,8 @@ function windTick() {
   _fpsAcc += dt; _fpsN++;
   if (now - _fpsSince > 2500) {
     const fps = _fpsN / Math.max(1e-3, _fpsAcc);
-    if (fps < 24 && windDensity > 0.2) {
+    const settled = viewer.scene.globe.tilesLoaded && viewer.dataSourceDisplay.ready;
+    if (settled && fps < 24 && windDensity > 0.3 && !windFull) {
       windDensity /= 2; windThinned = true;
       for (const p of windPrims.values()) p.fraction = windDensity;
       renderLegend();
