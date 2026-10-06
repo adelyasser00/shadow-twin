@@ -1116,7 +1116,17 @@ function renderWindChangeLegend(c) {
     `changes under 10% not drawn`;
   $("legrows").innerHTML = rows.join("") +
     `<div style="margin-top:8px;color:#79828f;font-size:9.5px;line-height:1.5">Park: ${fmt(c.park_ha_windier_30, 1)} ha
-     at least 30% windier, ${fmt(c.park_ha_calmer_30, 1)} ha at least 30% calmer. Smoothed over 10 m.</div>`;
+     at least 30% windier, ${fmt(c.park_ha_calmer_30, 1)} ha at least 30% calmer. Smoothed over 20 m.</div>`;
+}
+
+// Say so when the flow on screen was simulated for another direction.
+function windDirNote(run, w) {
+  if (!run) return "";
+  const off = Math.abs(((run.dir - w.dir) % 360 + 540) % 360 - 180);
+  if (off <= 0.5) return "";
+  if (off <= 12) return `<div style="margin-top:6px;color:#79828f;font-size:9.5px">Nearest simulated direction: ${run.dir}°.</div>`;
+  return `<div style="margin-top:6px;color:#ffb4a0;font-size:10px;line-height:1.45">The wind is from ${Math.round(w.dir)}°,
+    but the nearest direction simulated so far is ${run.dir}°, ${Math.round(off)}° away: the pattern shown is only a rough guide.</div>`;
 }
 
 function renderWindLegend() {
@@ -1143,8 +1153,7 @@ function renderWindLegend() {
     ? `<div class="row" style="margin-top:6px"><span class="sw" style="background:${GROWN_CSS}"></span>
        grew since 2017</div>` : "";
   $("legrows").innerHTML = rows.join("") + grown + lines +
-    (run && Math.abs(((run.dir - w.dir) % 360 + 540) % 360 - 180) > 0.5
-      ? `<div style="margin-top:6px;color:#79828f;font-size:9.5px">Nearest simulated direction: ${run.dir}°.</div>` : "");
+    windDirNote(run, w);
 }
 
 function renderWindStats() {
