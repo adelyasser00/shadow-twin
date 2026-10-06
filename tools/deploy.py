@@ -11,6 +11,7 @@ Makes deploy/ containing:
     frames-2017/        images for the 2017 build, if it was split
     heat/               heat layers (heat.json and images), if they were exported
     preview.png         link-preview image, if you put one in viewer/
+    robots.txt          lets link-preview bots in
 
 The shadow-twin-*.html copies are included too, so the comparison finds its
 other half whichever name it asks for.
@@ -45,7 +46,10 @@ WANT = [("shadow-twin-today.html", "index.html", True),
         ("shadow-twin-2017.html", "shadow-twin-2017.html", False),
         ("data-today.json", "data-today.json", False),
         ("data-2017.json", "data-2017.json", False),
-        ("preview.png", "preview.png", False)]
+        ("preview.png", "preview.png", False),
+        # Without it Pages answers /robots.txt with index.html, and link
+        # preview bots (LinkedIn) may read that as "not allowed".
+        ("robots.txt", "robots.txt", True)]
 FOLDERS = ["frames-today", "frames-2017", "heat"]
 SITE = os.environ.get("SITE_URL", "https://shadow-twin-adelyasser00.pages.dev").rstrip("/")
 # Cloudflare Pages serves 2017.html at /2017 (clean URLs).
