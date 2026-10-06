@@ -21,6 +21,10 @@ site; only a new deployment does.
 Limits worth knowing: 25 MiB per file and 1,000 files for a drag-and-drop
 deployment. A whole-park build is a couple of hundred files, well inside both.
 
+Link previews (LinkedIn, Slack, WhatsApp) need full URLs, so each page's
+preview tags are rewritten here against SITE_URL (default: the live site), and
+each page gets its own og:url. preview.png comes from tools/compose_linkedin.py.
+
 Do NOT include viewer/vendor/. It is 23 MB of Cesium in thousands of files, and
 the published page falls back to the Cesium CDN anyway.
 """
@@ -40,6 +44,22 @@ WANT = [("shadow-twin-today.html", "index.html", True),
         ("shadow-twin-2017.html", "shadow-twin-2017.html", False),
         ("preview.png", "preview.png", False)]
 FOLDERS = ["frames-today", "frames-2017", "heat"]
+SITE = os.environ.get("SITE_URL", "https://shadow-twin-adelyasser00.pages.dev").rstrip("/")
+# Cloudflare Pages serves 2017.html at /2017 (clean URLs).
+PAGE_URL = {"index.html": "/", "2017.html": "/2017"}
+
+
+def absolute_preview(path, dst):
+    """Full URLs in the link-preview tags, and the page's own og:url."""
+    with open(path, encoding="utf-8") as f:
+        s = f.read()
+    s = s.replace('content="preview.png"', f'content="{SITE}/preview.png"')
+    url = SITE + PAGE_URL.get(dst, "/" + dst)
+    if 'property="og:url"' not in s:
+        s = s.replace('<meta property="og:type"', f'<meta property="og:url" content="{url}">\n'
+                      '<meta property="og:type"', 1)
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(s)
 
 
 def main():
@@ -52,6 +72,8 @@ def main():
         p = os.path.join(VIEWER, src)
         if os.path.exists(p):
             shutil.copy(p, os.path.join(OUT, dst))
+            if dst.endswith(".html"):
+                absolute_preview(os.path.join(OUT, dst), dst)
             mb = os.path.getsize(p) / 1e6
             flag = "  OVER 25 MiB, will be rejected" if mb > 25 else ""
             print(f"  {dst:<24} {mb:6.2f} MB   from {src}{flag}")

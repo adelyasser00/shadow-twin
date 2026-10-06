@@ -6,16 +6,21 @@
 <title>Shadow twin: Central Park</title>
 <!-- Link preview. LinkedIn, Slack and WhatsApp read these when someone pastes
      the URL. Without them the card is a blank box with a bare domain, which
-     costs clicks. preview.png must sit next to this file on the host. -->
+     costs clicks. preview.png must sit next to this file on the host, and
+     tools/deploy.py turns these relative links into full URLs, which
+     LinkedIn requires. -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="Shadow twin: Central Park, Manhattan">
-<meta property="og:description" content="Where the shadows fall on Central Park, hour by hour, from New York's own LiDAR survey and building footprints. Built on the method the city uses for environmental review.">
+<meta property="og:description" content="Interactive 3D twin of Central Park: where the shadows fall hour by hour, and how much colder the park feels in winter since the new supertalls went up. From NYC's own LiDAR and building data.">
 <meta property="og:image" content="preview.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="627">
+<meta property="og:image:alt" content="3D view of Central Park with blue columns where the park now feels colder, behind the amber supertalls on 57th Street">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Shadow twin: Central Park, Manhattan">
-<meta name="twitter:description" content="Shadows on Central Park, hour by hour, from public LiDAR. Open source.">
+<meta name="twitter:description" content="Shadows on Central Park hour by hour, and where the new towers make it feel colder. From public LiDAR. Open source.">
 <meta name="twitter:image" content="preview.png">
-<meta name="description" content="Interactive shadow study of Central Park from NYC LiDAR and building footprints, following the CEQR analysis method.">
+<meta name="description" content="Interactive shadow and felt-temperature study of Central Park from NYC LiDAR and building footprints, following the CEQR analysis method.">
 <style>
   html,body,#cesiumContainer{width:100%;height:100%;margin:0;padding:0;overflow:hidden}
   body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#0d1014;

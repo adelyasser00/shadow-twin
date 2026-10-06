@@ -326,6 +326,19 @@ def save(img, name):
     im.resize((400, int(400 * im.height / im.width)), Image.LANCZOS).save(p.replace(".png", "_phone400.png"))
 
 
+def link_preview():
+    """viewer/preview.png, the 1200 x 627 card LinkedIn shows for the site link.
+
+    The tower view cropped to the towers and their fingers, no text: the card
+    already prints the page title under the image.
+    """
+    raw = Image.open(os.path.join(POST, "li_towers_raw.png")).convert("RGB")
+    img = raw.crop((0, 250, 1080, 815)).resize((1200, 627), Image.LANCZOS)
+    p = os.path.join(HERE, "viewer", "preview.png")
+    img.save(p, optimize=True)
+    print(f"wrote {p}  {os.path.getsize(p) / 1e6:.2f} MB")
+
+
 def main():
     n = numbers()
     with open(os.path.join(HERE, "viewer", "heat", "heat.json"), encoding="utf-8") as f:
@@ -341,6 +354,7 @@ def main():
     for k in HERO_TITLES:
         save(hero_image(k, n, heat, tmeta, towers), f"linkedin_towers_{k}.png")
     save(pair_image(n, heat), "linkedin_2017_vs_today.png")
+    link_preview()
     return 0
 
 
