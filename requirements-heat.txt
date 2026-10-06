@@ -8,3 +8,5 @@ websocket-client>=1.8
 #   numpy<2.4  solweig==0.1.0b96  umep==0.0.1b47
 # Wind layer: the GPU solver runs through OpenCL (any GPU with a current driver)
 pyopencl>=2024.1
+# tools/clip_wind.py encodes MP4 with the ffmpeg this package ships
+imageio-ffmpeg>=0.5
