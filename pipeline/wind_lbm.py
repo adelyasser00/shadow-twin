@@ -28,7 +28,14 @@ inlet face and one outlet face.
   outlet    equilibrium at density 1 and the velocity one cell upstream
   sides     periodic
   top       free slip (mirror)
-  ground    solid, halfway bounce-back, as are buildings
+  walls     ground, roofs and facades are free-slip (specular reflection at
+            the halfway wall), and the first open cell above any ground or
+            roof feels a log-law roughness drag, F = -Cd |u| u, with
+            Cd = (kappa / ln(z1 / z0))^2 for z1 half a cell. At 8 m cells a
+            no-slip wall cannot be resolved: with the Smagorinsky model it
+            brakes the first layer far too hard (it made the open lawn 2 to 3
+            times too calm). A slip wall plus a wall-law drag is the usual
+            remedy at this resolution. Bounce-back (no-slip) stays available.
   trees     a drag force per cell, F = -c |u| u, applied implicitly with the
             exact difference method (Kupershtokh), so dense canopy cannot
             reverse the flow
@@ -62,7 +69,13 @@ OPP = np.array([0] + [i + 1 if i % 2 else i - 1 for i in range(1, 19)], np.int32
 MZ = np.array([int(np.nonzero((C[:, 0] == c[0]) & (C[:, 1] == c[1]) & (C[:, 2] == -c[2]))[0][0])
                for c in C], np.int32)
 
+# Index of the lattice velocity (cx, cy, cz), at (cx + 1) * 9 + (cy + 1) * 3 + cz + 1.
+IDX = np.full(27, -1, np.int32)
+for _i, _c in enumerate(C):
+    IDX[(_c[0] + 1) * 9 + (_c[1] + 1) * 3 + _c[2] + 1] = _i
+
 FLUID, SOLID, INLET, OUTLET = 0, 1, 2, 3
+KAPPA = 0.41
 NACC = 5                        # summed: u, v, w, |u|^2, |u|
 CS_SMAGORINSKY = 0.17
 
@@ -74,6 +87,7 @@ KERNEL = r"""
 #define N  %(n)dL
 #define TAU0 %(tau0)ff
 #define SMAG %(smag)ff
+#define SLIP %(slip)d
 
 __constant int CX[19] = {%(cx)s};
 __constant int CY[19] = {%(cy)s};
@@ -81,6 +95,7 @@ __constant int CZ[19] = {%(cz)s};
 __constant float WT[19] = {%(w)s};
 __constant int OP[19] = {%(opp)s};
 __constant int MZ[19] = {%(mz)s};
+__constant int IX[27] = {%(idx)s};
 
 inline float load_f(__global const half* f, int i, long n) {
     return vload_half(i * N + n, f) + WT[i];
@@ -140,7 +155,25 @@ __kernel void step(__global const half* fa, __global half* fb,
             continue;
         }
         const long m = (long)xs + NX * ((long)ys + NY * (long)zs);
-        f[i] = flag[m] == 1 ? load_f(fa, OP[i], n) : load_f(fa, i, m);
+        if (flag[m] != 1) { f[i] = load_f(fa, i, m); continue; }
+#if SLIP
+        // Specular reflection off the voxel faces that block this link. The
+        // blocking faces are the axis neighbours that are solid.
+        int yy = y - CY[i]; yy = yy < 0 ? yy + NY : (yy >= NY ? yy - NY : yy);
+        const int rx = CX[i] != 0 && flag[(long)(x - CX[i]) + NX * ((long)y + NY * (long)z)] == 1;
+        const int ry = CY[i] != 0 && flag[(long)x + NX * ((long)yy + NY * (long)z)] == 1;
+        const int rz = CZ[i] != 0 && flag[(long)x + NX * ((long)y + NY * (long)(z - CZ[i]))] == 1;
+        if (rx | ry | rz) {
+            const int sx = x - (rx ? 0 : CX[i]);
+            int sy = y - (ry ? 0 : CY[i]); sy = sy < 0 ? sy + NY : (sy >= NY ? sy - NY : sy);
+            const int sz = z - (rz ? 0 : CZ[i]);
+            const long ms = (long)sx + NX * ((long)sy + NY * (long)sz);
+            const int j = IX[((rx ? -CX[i] : CX[i]) + 1) * 9 + ((ry ? -CY[i] : CY[i]) + 1) * 3
+                             + (rz ? -CZ[i] : CZ[i]) + 1];
+            if (flag[ms] != 1) { f[i] = load_f(fa, j, ms); continue; }
+        }
+#endif
+        f[i] = load_f(fa, OP[i], n);          // bounce-back: edges, corners, no-slip
     }
 
     rho = 0.0f; ux = 0.0f; uy = 0.0f; uz = 0.0f;
@@ -202,7 +235,7 @@ class Solver:
     """
 
     def __init__(self, solid, profile, veg=None, tau0=0.5005, smag=CS_SMAGORINSKY,
-                 device=None, log=print):
+                 slip=True, z0_m=0.1, res_m=8.0, device=None, log=print):
         import pyopencl as cl
         solid = np.ascontiguousarray(solid, dtype=bool)
         nz, ny, nx = solid.shape
@@ -220,6 +253,14 @@ class Solver:
             raise ValueError("profile must have one speed per layer")
         if veg is None:
             veg = np.zeros(solid.shape, np.float32)
+        veg = np.asarray(veg, np.float32).copy()
+        self.cd_wall = 0.0
+        if slip:
+            # Wall-law drag in the first open cell above ground and roofs.
+            self.cd_wall = wall_drag(z0_m, res_m)
+            above = np.zeros_like(solid)
+            above[1:] = solid[:-1] & ~solid[1:]
+            veg[above] += self.cd_wall
         veg = np.where(solid, 0.0, veg).astype(np.float32)
 
         self.ctx = cl.Context([device or pick_device()])
@@ -231,7 +272,8 @@ class Solver:
         if lattice_bytes > dev.max_mem_alloc_size:
             raise MemoryError(f"{n:,} cells need {lattice_bytes / 2**20:.0f} MB per lattice, "
                               f"the device allows {dev.max_mem_alloc_size / 2**20:.0f} MB per buffer")
-        src = KERNEL % dict(nx=nx, ny=ny, nz=nz, n=n, tau0=tau0, smag=smag,
+        src = KERNEL % dict(nx=nx, ny=ny, nz=nz, n=n, tau0=tau0, smag=smag, slip=int(bool(slip)),
+                            idx=_csv(IDX),
                             cx=_csv(C[:, 0]), cy=_csv(C[:, 1]), cz=_csv(C[:, 2]),
                             w=_csv(W, "{:.9f}f"), opp=_csv(OPP), mz=_csv(MZ))
         self.prg = cl.Program(self.ctx, src).build(options=["-cl-fast-relaxed-math"])
@@ -252,7 +294,8 @@ class Solver:
         self.samples = 0
         self.mem_mb = (2 * lattice_bytes + (3 + NACC) * 4 * n + 5 * n) / 2**20
         log(f"  lbm: {nx} x {ny} x {nz} = {n / 1e6:.1f} M cells on {self.device_name}, "
-            f"{self.mem_mb:.0f} MB, tau0 {tau0}, Cs {smag}")
+            f"{self.mem_mb:.0f} MB, tau0 {tau0}, Cs {smag}, "
+            + (f"slip walls, wall drag {self.cd_wall:.4f} (z0 {z0_m} m)" if slip else "no-slip walls"))
 
     def run(self, steps, accumulate_every=0, log_every=0):
         """Advance `steps` steps; sum velocity every `accumulate_every` steps (0: never)."""
@@ -316,6 +359,11 @@ def pick_device():
                               or "advanced micro" in d.vendor.lower()), d.global_mem_size),
               reverse=True)
     return pool[0]
+
+
+def wall_drag(z0_m, res_m):
+    """Log-law drag coefficient for the first cell above a wall, centre half a cell up."""
+    return (KAPPA / np.log(0.5 * res_m / z0_m)) ** 2
 
 
 def power_profile(nz, ground_k, u_ref, z_ref_cells, alpha):
