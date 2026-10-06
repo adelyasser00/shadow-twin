@@ -34,6 +34,7 @@ CASES = [
     ("wind_dec", "shadow-twin.html", "layer=wind&season=dec", (1600, 900), False),
     ("wind_dec_2017", "shadow-twin-2017.html", "layer=wind&season=dec", (1600, 900), False),
     ("wind_live", "shadow-twin.html", "layer=wind&season=live", (1600, 900), False),
+    ("wind_jun", "shadow-twin.html", "layer=wind&season=jun", (1600, 900), False),
     ("felt_local", "shadow-twin.html", "layer=change&season=dec", (1600, 900), False),
     ("felt_station", "shadow-twin.html", "layer=change&season=dec&localwind=0", (1600, 900), False),
     ("phone_wind", "shadow-twin.html", "layer=wind&season=dec", (390, 844), True),
