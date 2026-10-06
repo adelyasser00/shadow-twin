@@ -33,15 +33,15 @@ from render_post import CHROME, Tab  # noqa: E402
 OUT = os.path.join(HERE, "data", "wind", "figures", "post")
 BASE = os.environ.get("VIEWER_URL", "http://127.0.0.1:8765/")
 PORT = 9335
-EXPOSURES = 10
+EXPOSURES = 5
 
 CAMS = {
     # Behind 57th Street looking up the avenues, as the heat post.
     "hero": {"lat": 40.75735, "lon": -73.984154, "h": 900, "heading": 28.9, "pitch": -32},
     "heroP": {"lat": 40.75600, "lon": -73.98494, "h": 1050, "heading": 28.9, "pitch": -36},
     # From the north-west, over the park, looking downwind at the towers' windward faces.
-    "upwind": {"lat": 40.7745, "lon": -73.9895, "h": 650, "heading": 140.0, "pitch": -24},
-    "upwindP": {"lat": 40.7760, "lon": -73.9905, "h": 780, "heading": 140.0, "pitch": -28},
+    "upwind": {"lat": 40.7785, "lon": -73.9800, "h": 900, "heading": 158.0, "pitch": -30},
+    "upwindP": {"lat": 40.7800, "lon": -73.9805, "h": 1050, "heading": 158.0, "pitch": -33},
     # Side view along 57th Street, to see air thrown down the towers.
     "side": {"lat": 40.7685, "lon": -73.9700, "h": 260, "heading": 225.0, "pitch": -12},
     "top": {"lat": 40.75650, "lon": -73.98330, "h": 2300, "heading": 28.9, "pitch": -58},
@@ -49,12 +49,12 @@ CAMS = {
 
 SHOTS = [
     # name, page, query, size, camera
-    ("wind_dec_upwind", "shadow-twin.html", "layer=wind&season=dec&t=12:30&anim=1", (1920, 1080), "upwind"),
-    ("wind_dec_upwindP", "shadow-twin.html", "layer=wind&season=dec&t=12:30&anim=1", (1080, 1350), "upwindP"),
-    ("wind_dec_hero", "shadow-twin.html", "layer=wind&season=dec&t=12:30&anim=1", (1920, 1080), "hero"),
-    ("wind_dec_side", "shadow-twin.html", "layer=wind&season=dec&t=12:30&anim=1", (1920, 1080), "side"),
-    ("wind_dec_top", "shadow-twin.html", "layer=wind&season=dec&t=12:30&anim=1", (1920, 1080), "top"),
-    ("wind_dec_2017_upwind", "shadow-twin-2017.html", "layer=wind&season=dec&t=12:30&anim=1", (1920, 1080), "upwind"),
+    ("wind_dec_upwind", "shadow-twin.html", "layer=wind&season=dec&t=12:30&anim=1&full=1", (1920, 1080), "upwind"),
+    ("wind_dec_upwindP", "shadow-twin.html", "layer=wind&season=dec&t=12:30&anim=1&full=1", (1080, 1350), "upwindP"),
+    ("wind_dec_hero", "shadow-twin.html", "layer=wind&season=dec&t=12:30&anim=1&full=1", (1920, 1080), "hero"),
+    ("wind_dec_side", "shadow-twin.html", "layer=wind&season=dec&t=12:30&anim=1&full=1", (1920, 1080), "side"),
+    ("wind_dec_top", "shadow-twin.html", "layer=wind&season=dec&t=12:30&anim=1&full=1", (1920, 1080), "top"),
+    ("wind_dec_2017_upwind", "shadow-twin-2017.html", "layer=wind&season=dec&t=12:30&anim=1&full=1", (1920, 1080), "upwind"),
 ]
 
 READY = """
@@ -67,7 +67,7 @@ READY = """
   });
   await until(() => typeof viewer !== 'undefined' && viewer && HEAT && WIND && activeLayer === 'wind', 180000);
   await until(() => viewer.dataSourceDisplay.ready, 240000);
-  await until(() => [...windPrims.values()].some(p => p.show && p._cmd), 60000);
+  await until(() => [...windPrims.values()].some(p => p.show && p._cmd), 300000);
   return Math.round((performance.now() - t0) / 1000);
 })()
 """
@@ -153,7 +153,7 @@ def main():
             tab.call("Page.navigate", url=f"{BASE}{page}?{query}&r={int(time.time())}")
             time.sleep(3)
             secs = tab.js(READY, timeout_s=600)
-            out = tab.js(SHOOT % {"cam": json.dumps(CAMS[cam]), "n": EXPOSURES, "step": 26.0 / EXPOSURES},
+            out = tab.js(SHOOT % {"cam": json.dumps(CAMS[cam]), "n": EXPOSURES, "step": 3.0},
                          timeout_s=600)
             img = stack(out["shots"])
             path = os.path.join(OUT, f"{name}_{stamp}.png")
