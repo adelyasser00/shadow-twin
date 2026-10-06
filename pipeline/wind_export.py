@@ -73,11 +73,12 @@ K_COLOURS = ["#1a1035", "#2c2a6b", "#2f4f8f", "#2f7aa6", "#3aa3b0",
 K_ALPHA = 200
 
 # Change since 2017: today's street wind over 2017's, minus one, in percent.
-# Both are smoothed over 10 m first (sigma), because single 8 m cells carry
-# about 10% of averaging noise; below 10% nothing is drawn.
+# Both are smoothed over 20 m first (sigma): single 8 m cells carry about 10%
+# of averaging noise, and the 6 m grid check agrees with 8 m from about 20 m
+# up (correlation 0.80 at 20 m, 0.69 cell by cell). Below 10% nothing is drawn.
 CHG_BREAKS = [-100, -50, -30, -10, 10, 30, 50, 100, 400]
 CHG_COLOURS = ["#b8651b", "#e39a4f", "#f2c99a", None, "#9fd6ea", "#4fa8d8", "#1f6fb2", "#163f80"]
-CHG_SMOOTH_CELLS = 5
+CHG_SMOOTH_CELLS = 10
 
 WGS84_A = 6378137.0
 WGS84_E2 = 6.69437999014e-3
