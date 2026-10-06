@@ -27,8 +27,10 @@ not. Height steps are whole cells.
 
 Trees are drag, not walls: within the crown (the top three quarters of the
 canopy height), each cell gets c = Cd * LAD * dx * cover, the standard canopy
-drag (Cd 0.2, leaf area density LAD per m3 of crown). Bare in December (LAD
-0.3, mostly branches), in leaf in June (LAD 1.0).
+drag (Cd 0.2, leaf area density LAD per m3 of crown). In leaf (June), LAD 0.5:
+park trees carry a leaf area of 3 to 6 m2 per m2 of ground over crowns about
+10 m deep. Bare (December), LAD 0.1: branches and stems alone are about a
+fifth of that.
 """
 
 from __future__ import annotations
@@ -52,7 +54,7 @@ RES_CANVAS = 2.0
 CANVAS_HALF_M = 3300.0          # canvas spans 6.6 km, enough for a 3.2 x 2.9 km box at any angle
 SURVEY_YEAR = 2017
 CD_TREE = 0.2
-LAD = {"dec": 0.3, "jun": 1.0}  # m2 of leaf (or branch) per m3 of crown
+LAD = {"dec": 0.1, "jun": 0.5}  # m2 of leaf (or branch) per m3 of crown
 CROWN_BASE = 0.25               # crown starts at a quarter of the tree height
 INLET_CLEAR = 6                 # cells kept free of buildings at the inlet
 OUTLET_CLEAR = 4
