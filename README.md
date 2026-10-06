@@ -392,11 +392,14 @@ First results, the clear December day's northwester, 2017 against today:
 | Around 53 West 53rd Street | 29% stronger |
 | Around Steinway Tower | typical spot unchanged, windiest tenth 39% stronger |
 | Central Park, within 1.5 km of 59th Street | about the same (+1%): the park is upwind of the towers |
-| Park that feels 5 °C+ colder for an hour or more, with the wind at each spot | 19.9 ha (25.7 ha with one wind for the park) |
+| Park that feels 5 °C+ colder for an hour or more, with the wind at each spot | 24.9 ha (25.7 ha with one wind for the park) |
 
 The towers change the wind mostly at their own feet. The park's winter chill
-is still about shade; with the wind at each spot instead of one wind
-everywhere, the area that feels 5 °C colder shrinks from 25.7 to 19.9 ha.
+is about shade: with the wind at each spot instead of one wind everywhere, the
+area that feels 5 °C colder moves from 25.7 to 24.9 ha. Wind differences
+between the two years count only where they exceed three times the noise of
+the simulation (measured in the north of the park, where nothing changed);
+below that, both years get the same wind.
 Every number is in `data/wind/wind_story.csv` and `data/wind/wind_numbers.csv`.
 
 Checks (`pipeline/verify_wind.py`, thresholds set before the results), in

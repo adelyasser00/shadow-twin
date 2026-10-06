@@ -10,6 +10,19 @@ and UTCI is recomputed with SOLWEIG's own UTCI routine from the same mean
 radiant temperature, air temperature and humidity. Nothing else changes, so
 any difference from the heat layer is the wind's doing.
 
+The ratio map is smoothed over 20 m first. Each run carries about 8% of
+averaging noise per cell, independent between 2017 and today; in December
+felt temperature is sensitive enough to wind that unsmoothed, that noise
+painted 1 to 2 C of fake change across the whole park. 20 m is also the scale
+from which the 6 m grid check agrees with 8 m (pipeline/verify_wind.py, W2).
+
+Even smoothed, the two runs differ by a few percent where nothing changed
+(the north of the park, over 1 km from any tower that grew, is upwind of
+them on the December day). So the noise is measured there, and a wind
+difference between the years is kept only where it is larger than three
+times that noise; elsewhere both years get the mean of the two runs. Same
+idea as a significance test between two noisy simulations.
+
 Each hour uses the simulated direction nearest to the one the weather file
 reports (the sector method of pedestrian wind studies, NEN 8100). UTCI takes
 wind at 10 m between 0.5 and 17 m/s; the local wind is held inside that range.
@@ -37,6 +50,9 @@ from .wind_domain import WIND_DIR
 from .wind_export import OUT_DIR, runs_available
 
 UTCI_WIND_MIN, UTCI_WIND_MAX = 0.5, 17.0
+SMOOTH_CELLS = 10                 # 20 m on the 2 m heat grid
+QUIET_FROM_M = 1000.0             # park this far north of 59th Street: no tower changed near it
+NOISE_SIGMAS = 3.0
 CELL_HA = 4.0 / 1e4
 NUMBERS_CSV = os.path.join(WIND_DIR, "wind_numbers.csv")
 
@@ -64,6 +80,32 @@ def nearest_run(runs, scenario, season, wd):
     if not cands:
         return None
     return min(cands, key=lambda m: abs((m["theta_from_deg"] - wd + 180.0) % 360.0 - 180.0))
+
+
+_SMOOTH = {}
+
+
+def smoothed(k):
+    """Ratio map averaged over SMOOTH_CELLS (Gaussian sigma), ignoring cells with no value."""
+    from scipy.ndimage import gaussian_filter
+    key = (k.shape, float(np.nansum(k)))
+    if key not in _SMOOTH:
+        ok = np.isfinite(k)
+        num = gaussian_filter(np.where(ok, k, 0.0), SMOOTH_CELLS)
+        den = gaussian_filter(ok.astype(np.float32), SMOOTH_CELLS)
+        _SMOOTH[key] = np.where(ok & (den > 0.2), num / np.maximum(den, 1e-6), np.nan).astype(np.float32)
+    return _SMOOTH[key]
+
+
+def reconcile(k17, know, masks):
+    """Keep only wind differences above the noise; elsewhere both years get the mean."""
+    quiet = masks["report"] & (masks["dist59"] >= QUIET_FROM_M)
+    r = know / np.maximum(k17, 0.02) - 1.0
+    rq = r[quiet & np.isfinite(r)]
+    noise = float(np.std(rq)) if rq.size else 0.0
+    keep = np.abs(r) > NOISE_SIGMAS * noise
+    mean = 0.5 * (k17 + know)
+    return np.where(keep, k17, mean), np.where(keep, know, mean), noise
 
 
 def utci(ta, rh, tmrt, wind):
@@ -126,6 +168,14 @@ def main():
             wd, ws_raw = epw_wind(ts)
             out = {"time": st.strftime("%H:%M"), "wind_dir": wd, "wind_m_s": ws_raw, "air_c": w.ta}
             per = {}
+            ks = {}
+            for sc in ("2017", "today"):
+                m = nearest_run(runs, sc, season, wd)
+                if m is not None:
+                    ks[sc] = smoothed(np.load(os.path.join(m["_dir"], "k_heatgrid.npy")))
+            if len(ks) == 2:
+                ks["2017"], ks["today"], noise = reconcile(ks["2017"], ks["today"], masks)
+                out["wind_noise_pct"] = round(noise * 100, 1)
             for sc in ("2017", "today"):
                 m = nearest_run(runs, sc, season, wd)
                 tmrt = read_step(sc, season, "tmrt", ts)
@@ -136,7 +186,7 @@ def main():
                 if m is None:
                     per[sc] = None
                     continue
-                k = np.load(os.path.join(m["_dir"], "k_heatgrid.npy"))
+                k = ks[sc]
                 wind = np.clip(np.nan_to_num(k, nan=1.0) * ws_raw, UTCI_WIND_MIN, UTCI_WIND_MAX)
                 per[sc] = {"run": m["_name"], "dir": m["theta_from_deg"], "k": k, "wind": wind,
                            "felt": utci(w.ta, w.rh, tmrt, wind), "uniform": saved}
