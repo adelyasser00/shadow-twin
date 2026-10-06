@@ -251,6 +251,7 @@
   <button class="btn on" id="tlocal" style="display:none">Felt: wind at each spot</button>
   <button class="btn on" id="twind" style="display:none">Wind animation on</button>
   <button class="btn on" id="tair" style="display:none">3D air lines on</button>
+  <button class="btn" id="twmap" style="display:none">Map: wind speed</button>
   <div class="sec">Buildings</div>
   <div class="dayseg" id="bmode"></div>
   <div class="sl">
@@ -756,7 +757,7 @@ let WIND = null, WINDHEAT = null, windLive = null, windLiveMode = false, windLiv
 // Phones start with the animation off: it is the heaviest thing on the page.
 let windAnim = !(window.matchMedia &&
   matchMedia("(max-width: 760px), (pointer: coarse)").matches);
-let windAir = true, localWind = true, windDensity = 1, windThinned = false;
+let windAir = true, localWind = true, windDensity = 1, windThinned = false, windMapChange = false;
 // ?full=1 keeps every line, for renders.
 const windFull = new URLSearchParams(location.search).get("full") === "1";
 const WIND_SPEEDUP = 20;
@@ -835,6 +836,12 @@ function windRunFor(scen, season, dir) {
 }
 const windScen = () => isTodayBuild() ? "today" : "2017";
 const currentWindRun = () => { const w = windNow(); return windRunFor(windScen(), w.season, w.dir); };
+// The change map for the direction in view, when both years were run for it.
+function currentWindChange() {
+  const r = currentWindRun();
+  if (!r || !WIND.changes) return null;
+  return WIND.changes.find(c => c.dir === r.dir && c.season === r.season) || null;
+}
 
 async function fetchLive() {
   const lat = DATA.site.centre_lat, lon = DATA.site.centre_lon;
@@ -1097,7 +1104,24 @@ function windBasemap(on) {
 
 function windSpeedLabel(k, v) { return (k * v).toFixed(1); }
 
+function renderWindChangeLegend(c) {
+  const w = windNow();
+  const rows = WIND.change_legend.slice().reverse().map(e => {
+    const lab = e.min >= 100 ? "more than doubled" : e.min >= 10 ? `${e.min} to ${e.max}% windier`
+      : `${-e.max} to ${Math.min(100, -e.min)}% calmer`;
+    return `<div class="row"><span class="sw" style="background:${e.color}"></span>${lab}</div>`;
+  });
+  $("legtitle").textContent = "Street wind, today vs 2017";
+  $("legunits").textContent = `same wind from the ${compass16(c.dir)} (${c.dir}°), only the buildings differ; ` +
+    `changes under 10% not drawn`;
+  $("legrows").innerHTML = rows.join("") +
+    `<div style="margin-top:8px;color:#79828f;font-size:9.5px;line-height:1.5">Park: ${fmt(c.park_ha_windier_30, 1)} ha
+     at least 30% windier, ${fmt(c.park_ha_calmer_30, 1)} ha at least 30% calmer. Smoothed over 10 m.</div>`;
+}
+
 function renderWindLegend() {
+  const cm = windMapChange ? currentWindChange() : null;
+  if (cm) return renderWindChangeLegend(cm);
   const w = windNow(), run = currentWindRun();
   const V = Math.max(0.5, w.speed);
   const rows = WIND.legend.slice().reverse().map(e => {
@@ -1337,7 +1361,11 @@ function heatAbout() {
  * Overlay
  * ------------------------------------------------------------------ */
 function currentImage() {
-  if (isWind()) { const r = currentWindRun(); return r ? r.img : hstep().img.change; }
+  if (isWind()) {
+    const c = windMapChange ? currentWindChange() : null;
+    if (c) return c.img;
+    const r = currentWindRun(); return r ? r.img : hstep().img.change;
+  }
   if (isHeat()) {
     const im = feltStep().img;
     if (activeLayer === "change") return im.change;
@@ -1611,7 +1639,10 @@ function refresh() {
   updateColumns(); updateWindLines(); windBasemap(isWind());
   if (HEAT) $("tcols").style.display = isFelt() ? "" : "none";
   if (WINDHEAT) $("tlocal").style.display = isFelt() ? "" : "none";
-  if (WIND) { $("twind").style.display = isWind() ? "" : "none"; $("tair").style.display = isWind() ? "" : "none"; }
+  if (WIND) {
+    for (const id of ["twind", "tair"]) $(id).style.display = isWind() ? "" : "none";
+    $("twmap").style.display = isWind() && WIND.changes && WIND.changes.length ? "" : "none";
+  }
   if (overlayLayer) overlayLayer.alpha = overlayAlpha();
   $("hdrcav").textContent = isWind() ? WIND_CAVEAT
     : isHeat() ? (WIND && feltIsLocal() ? HEAT_CAVEAT_LOCAL : HEAT_CAVEAT) : SHADE_CAVEAT;
@@ -1772,6 +1803,11 @@ function wireUp() {
     windAir = !windAir;
     setToggle("tair", windAir, "3D air lines on", "3D air lines off");
     updateWindLines();
+  });
+  $("twmap").addEventListener("click", () => {
+    windMapChange = !windMapChange;
+    setToggle("twmap", windMapChange, "Map: change since 2017", "Map: wind speed");
+    refresh();
   });
   $("tlocal").addEventListener("click", () => {
     localWind = !localWind;

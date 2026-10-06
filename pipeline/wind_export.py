@@ -72,6 +72,13 @@ K_COLOURS = ["#1a1035", "#2c2a6b", "#2f4f8f", "#2f7aa6", "#3aa3b0",
              "#6cc7a6", "#b5e08f", "#f1ef7a", "#fff6c9"]
 K_ALPHA = 200
 
+# Change since 2017: today's street wind over 2017's, minus one, in percent.
+# Both are smoothed over 10 m first (sigma), because single 8 m cells carry
+# about 10% of averaging noise; below 10% nothing is drawn.
+CHG_BREAKS = [-100, -50, -30, -10, 10, 30, 50, 100, 400]
+CHG_COLOURS = ["#b8651b", "#e39a4f", "#f2c99a", None, "#9fd6ea", "#4fa8d8", "#1f6fb2", "#163f80"]
+CHG_SMOOTH_CELLS = 5
+
 WGS84_A = 6378137.0
 WGS84_E2 = 6.69437999014e-3
 
@@ -486,6 +493,50 @@ def main():
         print(f"{name}: open lawns {ref:.4f} (2017 {r17:.4f}), Sheep Meadow {m['_sheep'] / r17:.2f}, park median ratio "
               f"{out_runs[-1]['park_k_median']}, {len(st_enu)} street lines, {len(air_enu)} air lines, "
               f"{(s_bytes + a_bytes) / 1e6:.2f} MB", flush=True)
+    # Change maps where both years were run for the same direction and season.
+    changes = []
+    from scipy.ndimage import gaussian_filter
+    by = {(r["scenario"], r["season"], r["dir"], r["res_m"], "small" in r["name"]): r for r in out_runs}
+    for (sc, se, dr, rs, sm), r in by.items():
+        if sc != "today" or sm or ("2017", se, dr, rs, sm) not in by:
+            continue
+        r17 = by[("2017", se, dr, rs, sm)]
+        k = {}
+        for rr in (r, r17):
+            m = next(mm for mm in runs if mm["_name"] == rr["name"])
+            a = np.load(os.path.join(m["_dir"], "k_heatgrid.npy"))
+            ok = np.isfinite(a)
+            num = gaussian_filter(np.where(ok, a, 0.0), CHG_SMOOTH_CELLS)
+            den = gaussian_filter(ok.astype(np.float32), CHG_SMOOTH_CELLS)
+            k[rr["scenario"]] = np.where(ok & (den > 0.3), num / np.maximum(den, 1e-6), np.nan)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            pct = (k["today"] / np.maximum(k["2017"], 0.02) - 1.0) * 100.0
+        pct = np.clip(pct, -99.0, 399.0)
+        idx_ = painter.bin_index(np.nan_to_num(pct[fsl], nan=0.0), CHG_BREAKS,
+                                 masks["building"][fsl] | ~np.isfinite(pct[fsl]))
+        hole = CHG_BREAKS.index(-10) + 1
+        idx_[idx_ == hole] = 0
+        uri = export.encode_indexed(idx_, [c or "#000000" for c in CHG_COLOURS],
+                                    [0 if c is None else 215 for c in CHG_COLOURS])
+        nm = f"change_{se}_{dr:05.1f}.png"
+        import base64
+        with open(os.path.join(OUT_DIR, nm), "wb") as f:
+            f.write(base64.b64decode(uri.split(",", 1)[1]))
+        park = masks["report"]
+        pk = pct[park]
+        pk = pk[np.isfinite(pk)]
+        south = park & (masks["dist59"] <= 300.0)
+        ps = pct[south]
+        ps = ps[np.isfinite(ps)]
+        changes.append({"season": se, "dir": dr, "img": f"wind/{nm}?v={version}",
+                        "park_ha_windier_30": round(float((pk >= 30).sum() * 4 / 1e4), 2),
+                        "park_ha_calmer_30": round(float((pk <= -30).sum() * 4 / 1e4), 2),
+                        "south300_median_pct": round(float(np.median(ps)), 1) if ps.size else None,
+                        "park_median_pct": round(float(np.median(pk)), 1) if pk.size else None})
+        np.save(os.path.join(WIND_DIR, f"change_pct_{se}_{dr:05.1f}.npy"), pct.astype(np.float32))
+        print(f"change since 2017, {se} {dr}: park {changes[-1]['park_ha_windier_30']} ha 30%+ windier, "
+              f"{changes[-1]['park_ha_calmer_30']} ha 30%+ calmer; south 300 m median "
+              f"{changes[-1]['south300_median_pct']}%", flush=True)
     w_, s_, e_, n_ = bounds
     bundle = {
         "generated": datetime.now().isoformat(timespec="seconds"),
@@ -498,6 +549,9 @@ def main():
         "street_up_m": STREET_UP_M,
         "spacing_k1_m": VERTEX_CELLS * 8.0,
         "runs": out_runs,
+        "changes": changes,
+        "change_legend": [{"min": CHG_BREAKS[i], "max": CHG_BREAKS[i + 1], "color": c}
+                          for i, c in enumerate(CHG_COLOURS) if c is not None],
     }
     with open(os.path.join(OUT_DIR, "wind.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(bundle, f, separators=(",", ":"))
