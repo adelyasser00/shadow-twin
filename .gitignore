@@ -14,6 +14,7 @@ viewer/data.json
 viewer/shadow-twin*.html
 viewer/frames-*/
 viewer/heat/
+viewer/wind/
 
 # Python
 __pycache__/

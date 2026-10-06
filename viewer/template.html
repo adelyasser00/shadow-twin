@@ -248,6 +248,9 @@
     <input type="range" id="op" min="0" max="100" step="5" value="100">
   </div>
   <button class="btn on" id="tcols" style="display:none">3D columns on</button>
+  <button class="btn on" id="tlocal" style="display:none">Felt: wind at each spot</button>
+  <button class="btn on" id="twind" style="display:none">Wind animation on</button>
+  <button class="btn on" id="tair" style="display:none">3D air lines on</button>
   <div class="sec">Buildings</div>
   <div class="dayseg" id="bmode"></div>
   <div class="sl">
@@ -308,6 +311,7 @@
     <button data-layer="svf">Sky view</button>
     <button data-layer="felt" class="heatbtn" style="display:none">Feels like</button>
     <button data-layer="change" class="heatbtn" style="display:none">Colder since 2017</button>
+    <button data-layer="wind" class="windbtn" style="display:none">Wind</button>
   </div>
 </div>
 
@@ -480,7 +484,9 @@ const hasSvf = () => DATA.svf !== null && DATA.svf !== undefined;
  * ------------------------------------------------------------------ */
 let HEAT = null, heatSeason = 0, heatStep = 0, showCols = true;
 const colCache = new Map();
-const isHeat = () => activeLayer === "felt" || activeLayer === "change";
+// The heat clock: felt temperature, its change, and wind all run on the
+// heat layers' days and hours.
+const isHeat = () => activeLayer === "felt" || activeLayer === "change" || activeLayer === "wind";
 const hseason = () => HEAT.seasons[heatSeason];
 const hstep = () => hseason().steps[heatStep];
 const isTodayBuild = () => !!(DATA.model && DATA.model.scenario &&
@@ -488,6 +494,8 @@ const isTodayBuild = () => !!(DATA.model && DATA.model.scenario &&
 const nSteps = () => isHeat() ? hseason().steps.length : day().hours.length;
 const HEAT_CAVEAT = "Felt temperature is a model estimate (SOLWEIG). One wind for the " +
   "whole park, typical-year weather, clear day. Read the change, not the absolute.";
+const HEAT_CAVEAT_LOCAL = "Felt temperature is a model estimate (SOLWEIG), with the wind at each " +
+  "spot from a 3D simulation. Typical-year weather, clear day. Read the change, not the absolute.";
 const SHADE_CAVEAT = "Direct sun and shade computed from LiDAR surface geometry. " +
   "No temperature, no wind, no cloud. This is a shadow model.";
 
@@ -513,7 +521,9 @@ function worstStep(s) {
 }
 
 function prefetchHeat() {
-  for (const st of hseason().steps) {
+  if (!isFelt()) return;
+  const ws = localWind && WINDHEAT ? WINDHEAT.seasons.find(x => x.id === hseason().id) : null;
+  for (const st of (ws ? ws.steps : hseason().steps)) {
     for (const u of Object.values(st.img)) {
       if (_warm.has(u)) continue;
       _warm.add(u);
@@ -589,19 +599,21 @@ function buildFeltHeatmap(halfDegrees) {
 
 function updateColumns() {
   if (!viewer) return;
-  const want = !!HEAT && isHeat() && showCols;
+  const want = !!HEAT && isFelt() && showCols;
   const scen = isTodayBuild() ? "today" : "y2017";
+  const lw = want && feltIsLocal() ? "w" : "";
   const key = !want ? null : activeLayer === "felt"
-    ? `felt:${scen}:${heatSeason}:${heatStep}` : `chg:${heatSeason}:${heatStep}`;
+    ? `felt${lw}:${scen}:${heatSeason}:${heatStep}` : `chg${lw}:${heatSeason}:${heatStep}`;
   for (const [k, p] of colCache) p.show = (k === key);
   if (!want || colCache.has(key)) return;
+  const fs = feltStep();
   if (activeLayer === "felt") {
-    const vals = hstep().felt2 && hstep().felt2[scen];
+    const vals = fs.felt2 && fs.felt2[scen];
     if (!vals || !HEAT.sections) return;
     colCache.set(key, viewer.scene.primitives.add(buildFeltHeatmap(vals)));
     return;
   }
-  const cols = hstep().cols;
+  const cols = fs.cols;
   if (!cols || !cols.length) return;
   colCache.set(key, viewer.scene.primitives.add(buildColumns(cols)));
 }
@@ -637,7 +649,8 @@ function renderDaySeg() {
   const items = isHeat()
     ? HEAT.seasons.map(s => s.control ? `${s.short} (control)` : s.short)
     : DATA.days.map(d => d.short);
-  const cur = isHeat() ? heatSeason : dayIndex;
+  if (isWind()) items.push("Live now");
+  const cur = isWind() && windLiveMode ? HEAT.seasons.length : (isHeat() ? heatSeason : dayIndex);
   $("dayseg").innerHTML = items
     .map((t, i) => `<button data-day="${i}"${i === cur ? ' class="on"' : ""}>${t}</button>`).join("");
   document.querySelectorAll("#dayseg button").forEach(b =>
@@ -645,6 +658,7 @@ function renderDaySeg() {
 }
 
 function renderHeatLegend() {
+  if (isWind()) return renderWindLegend();
   const s = hseason(), st = hstep();
   const row = (c, a, b) => `<div class="row"><span class="sw" style="background:${c}"></span>` +
     `${a}${b ? ` <span style="color:#79828f;font-size:9.5px">&nbsp;${b}</span>` : ""}</div>`;
@@ -659,7 +673,8 @@ function renderHeatLegend() {
     });
     $("legtitle").textContent = "Feels like";
     $("legunits").textContent = `UTCI at body height, ${isTodayBuild() ? "today" : "2017"}, ` +
-      `${s.label.toLowerCase()}, ${st.time} EST`;
+      `${s.label.toLowerCase()}, ${st.time} EST` +
+      (feltIsLocal() ? ", with the wind at each spot" : ", one wind for the park");
     $("legrows").innerHTML = rows.join("") + columnsNote();
   } else {
     const rows = HEAT.legend.change.slice().reverse().filter(e => e.max <= 2.01 || e.min < 4)
@@ -667,9 +682,15 @@ function renderHeatLegend() {
         ? row(e.color, `${-e.max} to ${-e.min} &deg;C colder`)
         : row(e.color, `${e.min} to ${e.max} &deg;C warmer`));
     $("legtitle").textContent = "Colder since 2017";
-    $("legunits").textContent = `feels-like, today minus 2017, same hour and weather, ${st.time} EST`;
+    $("legunits").textContent = `feels-like, today minus 2017, same hour and weather, ${st.time} EST` +
+      (feltIsLocal() ? ", sun and wind" : ", sun only (one wind for the park)");
     $("legrows").innerHTML = rows.join("") + columnsNote();
   }
+}
+
+function windSeasonSum(key) {
+  const s = WINDHEAT && WINDHEAT.seasons.find(x => x.id === hseason().id);
+  return s ? s[key] : null;
 }
 
 function columnsNote() {
@@ -687,7 +708,8 @@ function columnsNote() {
 }
 
 function renderHeatStats() {
-  const s = hseason(), st = hstep(), sum = s.summary || {};
+  if (isWind()) return renderWindStats();
+  const s = hseason(), st = feltStep(), sum = s.summary || {};
   const today = isTodayBuild();
   let rows;
   if (activeLayer === "felt") {
@@ -696,14 +718,16 @@ function renderHeatStats() {
       [today ? "Same hour in 2017" : "Same hour today",
        fmt(today ? st.park_felt_2017_c : st.park_felt_today_c, 1) + " &deg;C"],
       ["Air temperature", fmt(st.air_c, 1) + " &deg;C"],
-      ["Wind", fmt(st.wind_m_s, 1) + " m/s"]
+      ["Wind", (st.wind_dir !== undefined ? compass16(st.wind_dir) + " " : "") + fmt(st.wind_m_s, 1) + " m/s" +
+        (feltIsLocal() ? ", varies by spot" : ", same everywhere")]
     ];
   } else {
     rows = [
       ["Park 2 &deg;C+ colder now", fmt(st.ha_colder_2, 1) + " ha"],
       ["Park 5 &deg;C+ colder now", fmt(st.ha_colder_5, 1) + " ha"],
       ["Biggest drop now", fmt(st.biggest_drop_c, 1) + " &deg;C"],
-      ["5 &deg;C+ colder at some hour", sum["ha_any_hour_le_-5"] === undefined ? "--"
+      ["5 &deg;C+ colder at some hour", feltIsLocal() ? `${fmt(windSeasonSum("ha_any_hour_le_-5"), 1)} of ${fmt(sum.report_ha, 0)} ha`
+        : sum["ha_any_hour_le_-5"] === undefined ? "--"
         : `${fmt(sum["ha_any_hour_le_-5"], 1)} of ${fmt(sum.report_ha, 0)} ha`]
     ];
   }
@@ -712,8 +736,410 @@ function renderHeatStats() {
     .map(([k, v]) => `<tr><td class="k">${k}</td><td class="v">${v}</td></tr>`).join("");
   $("statscope").innerHTML = `Central Park within 1.5 km of 59th Street, ground only ` +
     `(${fmt(HEAT.area_ha, 0)} ha). Median over the park. ` +
+    (feltIsLocal() ? "Wind at each spot from the 3D wind simulation. " : "") +
     (HEAT.status.validated ? "Checked against the shadow model and UMEP's reference code."
                            : "<b>Model estimate, validation pending.</b>");
+}
+
+/* ------------------------------------------------------------------ *
+ * Wind, optional. wind/wind.json and the line files come from
+ * pipeline/wind_export.py; wind/windheat.json (felt temperature with the
+ * local wind) from pipeline/wind_heat.py. The wind layer runs on the heat
+ * layers' days and hours, plus "Live now" from Open-Meteo.
+ *
+ * Nothing is simulated in the browser. A 3D wind simulation was run once
+ * per wind direction; the page plays it back. Each line follows the
+ * time-mean wind, and light moves along it at the simulated speed, sped up
+ * WIND_SPEEDUP times: fast where the wind is fast, slow in the lee.
+ * ------------------------------------------------------------------ */
+let WIND = null, WINDHEAT = null, windLive = null, windLiveMode = false, windLiveErr = null;
+// Phones start with the animation off: it is the heaviest thing on the page.
+let windAnim = !(window.matchMedia &&
+  matchMedia("(max-width: 760px), (pointer: coarse)").matches);
+let windAir = true, localWind = true, windDensity = 1, windThinned = false;
+const WIND_SPEEDUP = 20;
+// Under the moving lines the wind map is a backdrop, not the subject.
+const WIND_MAP_ALPHA = 0.55;
+const overlayAlpha = () => opacity * (activeLayer === "wind" && windAnim ? WIND_MAP_ALPHA : 1);
+const WIND_CAVEAT = "Wind simulated in 3D on 8 m cells (lattice Boltzmann, time-mean), scaled " +
+  "to the weather station's wind. Shows where it is windier or calmer, not gusts.";
+const isWind = () => activeLayer === "wind";
+const isFelt = () => activeLayer === "felt" || activeLayer === "change";
+const _windFetch = fetch("wind/wind.json", { cache: "no-cache" })
+  .then(r => r.ok ? r.json() : null).catch(() => null);
+const _windHeatFetch = fetch("wind/windheat.json", { cache: "no-cache" })
+  .then(r => r.ok ? r.json() : null).catch(() => null);
+
+async function loadWind() {
+  WIND = await _windFetch;
+  WINDHEAT = await _windHeatFetch;
+  if (!WIND || !HEAT || !WIND.runs || !WIND.runs.length) { WIND = null; return false; }
+  document.querySelectorAll("#layerseg .windbtn").forEach(b => b.style.display = "");
+  $("twind").style.display = ""; $("tair").style.display = "";
+  setToggle("twind", windAnim, "Wind animation on", "Wind animation off");
+  renderCopy();
+  if (WINDHEAT && WINDHEAT.seasons && WINDHEAT.seasons.length) {
+    $("tlocal").style.display = "";
+    setToggle("tlocal", localWind, "Felt: wind at each spot", "Felt: one wind for the park");
+  }
+  return true;
+}
+
+function setToggle(id, on, onText, offText) {
+  $(id).classList.toggle("on", on);
+  $(id).textContent = on ? onText : offText;
+}
+
+const COMPASS16 = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                   "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+const compass16 = d => COMPASS16[Math.round((((d % 360) + 360) % 360) / 22.5) % 16];
+
+// The heat step with the local wind, when there is one and it is wanted.
+function feltStep() {
+  if (localWind && WINDHEAT) {
+    const s = WINDHEAT.seasons.find(x => x.id === hseason().id);
+    const st = s && s.steps.find(x => x.time === hstep().time);
+    if (st) return st;
+  }
+  return hstep();
+}
+const feltIsLocal = () => feltStep() !== hstep();
+
+function windHeatStep() {
+  if (!WINDHEAT) return null;
+  const s = WINDHEAT.seasons.find(x => x.id === hseason().id);
+  return s ? s.steps.find(x => x.time === hstep().time) || null : null;
+}
+
+// Trees are bare from November to April.
+const liveSeason = () => { const m = new Date().getMonth(); return (m >= 4 && m <= 9) ? "jun" : "dec"; };
+
+function windNow() {
+  if (windLiveMode && windLive) {
+    return { dir: windLive.dir, speed: windLive.speed, season: liveSeason(), live: true };
+  }
+  const ws = windHeatStep();
+  return { dir: ws ? ws.wind_dir : 315, speed: ws ? ws.wind_m_s : hstep().wind_m_s,
+           season: hseason().id, live: false };
+}
+
+// The simulated direction nearest the wind. A run with the trees of the
+// wrong season counts as 15 degrees further away: direction matters more.
+function windRunFor(scen, season, dir) {
+  const pool = WIND.runs.filter(r => r.scenario === scen && r.res_m === 8 && !/small/.test(r.name));
+  if (!pool.length) return null;
+  const cost = r => Math.abs(((r.dir - dir) % 360 + 540) % 360 - 180) + (r.season === season ? 0 : 15);
+  return pool.reduce((a, b) => cost(b) < cost(a) ? b : a);
+}
+const windScen = () => isTodayBuild() ? "today" : "2017";
+const currentWindRun = () => { const w = windNow(); return windRunFor(windScen(), w.season, w.dir); };
+
+async function fetchLive() {
+  const lat = DATA.site.centre_lat, lon = DATA.site.centre_lon;
+  const url = "https://api.open-meteo.com/v1/forecast?latitude=" + lat.toFixed(4) +
+    "&longitude=" + lon.toFixed(4) + "&current=temperature_2m,relative_humidity_2m," +
+    "wind_speed_10m,wind_direction_10m,wind_gusts_10m&wind_speed_unit=ms" +
+    "&timezone=America%2FNew_York";
+  try {
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const c = (await r.json()).current;
+    windLive = { dir: c.wind_direction_10m, speed: c.wind_speed_10m, gust: c.wind_gusts_10m,
+                 ta: c.temperature_2m, rh: c.relative_humidity_2m, time: c.time };
+    windLiveErr = null;
+  } catch (e) {
+    windLiveErr = "Live wind unavailable (" + describe(e) + ")";
+  }
+}
+let _liveTimer = null;
+async function setLive(on) {
+  windLiveMode = on;
+  if (_liveTimer) { clearInterval(_liveTimer); _liveTimer = null; }
+  if (on) {
+    stopPlay();
+    await fetchLive();
+    _liveTimer = setInterval(async () => { await fetchLive(); if (isWind()) refresh(); }, 600000);
+  }
+  $("timesl").classList.toggle("off", on);
+  refresh();
+}
+
+/* ---------- the line renderer ----------
+ * One custom draw command per line file: ribbons a few pixels wide that
+ * always face the camera, drawn additively after the buildings, so they glow
+ * and hide behind walls. Vertices are one fixed slice of travel time apart,
+ * so a light that steps one vertex per tick moves at the local wind speed. */
+const WIND_VS = `
+in vec3 a_pos;
+in vec3 a_next;
+in vec4 a_aux;
+uniform float u_width;
+out float v_side;
+out float v_tau;
+out float v_k;
+out float v_ph;
+void main() {
+  vec4 p = czm_modelViewProjection * vec4(a_pos, 1.0);
+  vec4 q = czm_modelViewProjection * vec4(a_next, 1.0);
+  vec2 ps = p.xy / p.w * czm_viewport.zw;
+  vec2 qs = q.xy / max(q.w, 1e-6) * czm_viewport.zw;
+  vec2 d = qs - ps;
+  float L = length(d);
+  vec2 dir = L > 1e-6 ? d / L : vec2(1.0, 0.0);
+  vec2 nrm = vec2(-dir.y, dir.x);
+  p.xy += nrm * a_aux.x * u_width * 2.0 / czm_viewport.zw * p.w;
+  gl_Position = p;
+  v_side = a_aux.x; v_tau = a_aux.y; v_k = a_aux.z; v_ph = a_aux.w;
+}`;
+const WIND_FS = `
+in float v_side;
+in float v_tau;
+in float v_k;
+in float v_ph;
+uniform float u_phase;
+uniform float u_period;
+uniform float u_speed;
+uniform float u_base;
+vec3 ramp(float t) {
+  vec3 c0 = vec3(0.45, 0.66, 1.0);
+  vec3 c1 = vec3(0.78, 0.92, 1.0);
+  vec3 c2 = vec3(1.0, 1.0, 1.0);
+  vec3 c3 = vec3(1.0, 0.84, 0.42);
+  t = clamp(t, 0.0, 1.0);
+  if (t < 0.4) return mix(c0, c1, t / 0.4);
+  if (t < 0.75) return mix(c1, c2, (t - 0.4) / 0.35);
+  return mix(c2, c3, (t - 0.75) / 0.25);
+}
+void main() {
+  float edge = 1.0 - smoothstep(0.25, 1.0, abs(v_side));
+  float ph = fract((u_phase - v_tau) / u_period + v_ph);
+  float comet = pow(1.0 - ph, 7.0);
+  vec3 col = ramp(v_k * u_speed / 12.0);
+  float a = (u_base + 0.95 * comet) * edge;
+  out_FragColor = vec4(col, a);
+}`;
+
+class WindLines {
+  constructor(lines, kind, origin, k1m) {
+    this.lines = lines; this.kind = kind; this.k1m = k1m;
+    this.show = true; this.fraction = 1; this.phase = 0; this.speed = 5;
+    this.modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
+      Cesium.Cartesian3.fromDegrees(origin.lon, origin.lat, 0));
+    this._cmd = null;
+  }
+  _build(context) {
+    const { n, lens, pts } = this.lines;
+    let tot = 0;
+    for (let i = 0; i < n; i++) tot += lens[i];
+    const nv = tot * 2;
+    const pos = new Float32Array(nv * 3), nxt = new Float32Array(nv * 3), aux = new Float32Array(nv * 4);
+    const idx = new Uint32Array(Math.max(0, tot - n) * 6);
+    this.ends = new Uint32Array(n);
+    let v = 0, o = 0, ii = 0, r2 = 0;
+    for (let L = 0; L < n; L++) {
+      const len = lens[L], ph = Math.random();
+      for (let k = 0; k < len; k++) {
+        const a = (o + k) * 3;
+        const px = pts[a] / 10, py = pts[a + 1] / 10, pz = pts[a + 2] / 10;
+        const j = k < len - 1 ? a : a - 3;
+        const dx = (pts[j + 3] - pts[j]) / 10, dy = (pts[j + 4] - pts[j + 1]) / 10,
+              dz = (pts[j + 5] - pts[j + 2]) / 10;
+        const K = Math.hypot(dx, dy, dz) / this.k1m;
+        const qx = k < len - 1 ? pts[a + 3] / 10 : px + dx;
+        const qy = k < len - 1 ? pts[a + 4] / 10 : py + dy;
+        const qz = k < len - 1 ? pts[a + 5] / 10 : pz + dz;
+        r2 = Math.max(r2, px * px + py * py + pz * pz);
+        for (const side of [-1, 1]) {
+          pos[v * 3] = px; pos[v * 3 + 1] = py; pos[v * 3 + 2] = pz;
+          nxt[v * 3] = qx; nxt[v * 3 + 1] = qy; nxt[v * 3 + 2] = qz;
+          aux[v * 4] = side; aux[v * 4 + 1] = k; aux[v * 4 + 2] = K; aux[v * 4 + 3] = ph;
+          v++;
+        }
+      }
+      for (let k = 0; k < len - 1; k++) {
+        const b = (o + k) * 2;
+        idx[ii++] = b; idx[ii++] = b + 1; idx[ii++] = b + 2;
+        idx[ii++] = b + 1; idx[ii++] = b + 3; idx[ii++] = b + 2;
+      }
+      this.ends[L] = ii;
+      o += len;
+    }
+    const usage = Cesium.BufferUsage.STATIC_DRAW;
+    const vb = arr => Cesium.Buffer.createVertexBuffer({ context, typedArray: arr, usage });
+    const F = Cesium.ComponentDatatype.FLOAT;
+    this._va = new Cesium.VertexArray({
+      context,
+      indexBuffer: Cesium.Buffer.createIndexBuffer({ context, typedArray: idx, usage,
+        indexDatatype: Cesium.IndexDatatype.UNSIGNED_INT }),
+      attributes: [
+        { index: 0, vertexBuffer: vb(pos), componentsPerAttribute: 3, componentDatatype: F },
+        { index: 1, vertexBuffer: vb(nxt), componentsPerAttribute: 3, componentDatatype: F },
+        { index: 2, vertexBuffer: vb(aux), componentsPerAttribute: 4, componentDatatype: F }]
+    });
+    this._sp = Cesium.ShaderProgram.fromCache({ context, vertexShaderSource: WIND_VS,
+      fragmentShaderSource: WIND_FS, attributeLocations: { a_pos: 0, a_next: 1, a_aux: 2 } });
+    const rs = Cesium.RenderState.fromCache({ depthTest: { enabled: true }, depthMask: false,
+      blending: Cesium.BlendingState.ADDITIVE_BLEND, cull: { enabled: false } });
+    const self = this, air = this.kind === "air";
+    const sphere = new Cesium.BoundingSphere(Cesium.Cartesian3.ZERO, Math.sqrt(r2) + 50);
+    this._cmd = new Cesium.DrawCommand({
+      modelMatrix: this.modelMatrix, vertexArray: this._va, shaderProgram: this._sp,
+      renderState: rs, pass: Cesium.Pass.TRANSLUCENT, primitiveType: Cesium.PrimitiveType.TRIANGLES,
+      boundingVolume: Cesium.BoundingSphere.transform(sphere, this.modelMatrix, new Cesium.BoundingSphere()),
+      owner: this,
+      uniformMap: {
+        u_phase: () => self.phase,
+        u_period: () => air ? 34.0 : 26.0,
+        u_speed: () => self.speed,
+        u_base: () => air ? 0.10 : 0.16,
+        u_width: () => (air ? 1.9 : 1.5) * (window.devicePixelRatio || 1)
+      }
+    });
+  }
+  update(frameState) {
+    if (!this.show || !frameState.passes.render || !this.lines.n) return;
+    if (!this._cmd) this._build(frameState.context);
+    const m = Math.max(1, Math.round(this.lines.n * this.fraction));
+    this._cmd.count = this.ends[m - 1];
+    if (this._cmd.count > 0) frameState.commandList.push(this._cmd);
+  }
+  isDestroyed() { return false; }
+  destroy() {
+    if (this._va) this._va.destroy();
+    if (this._sp) this._sp.destroy();
+    return Cesium.destroyObject(this);
+  }
+}
+
+const _lineFiles = new Map();
+function fetchLines(url) {
+  if (!_lineFiles.has(url)) {
+    _lineFiles.set(url, fetch(url).then(r => {
+      if (!r.ok) throw new Error(url + ": " + r.status);
+      return r.arrayBuffer();
+    }).then(buf => {
+      const h = new Int32Array(buf, 0, 2);
+      const n = h[0], tot = h[1];
+      return { n, lens: new Uint16Array(buf, 8, n), pts: new Int16Array(buf, 8 + 2 * n, tot * 3) };
+    }));
+  }
+  return _lineFiles.get(url);
+}
+
+const windPrims = new Map();
+let _windSeq = 0;
+async function updateWindLines() {
+  const run = viewer && WIND && isWind() && windAnim ? currentWindRun() : null;
+  const urls = run ? [run.street].concat(windAir ? [run.air] : []) : [];
+  for (const [u, p] of windPrims) p.show = urls.includes(u);
+  const my = ++_windSeq;
+  for (const u of urls) {
+    if (windPrims.has(u)) continue;
+    let lines;
+    try { lines = await fetchLines(u); } catch (e) { console.error(e); continue; }
+    if (windPrims.has(u)) continue;
+    const p = new WindLines(lines, u.includes("/air_") ? "air" : "street", WIND.origin, WIND.spacing_k1_m);
+    p.fraction = windDensity;
+    windPrims.set(u, viewer.scene.primitives.add(p));
+    p.show = my === _windSeq ? urls.includes(u) : false;
+  }
+}
+
+// The clock: light advances WIND_SPEEDUP x (wind / vertex spacing) vertices
+// per second. A slow phone thins the lines instead of stuttering.
+let _windLast = null, _fpsAcc = 0, _fpsN = 0, _fpsSince = 0;
+function windTick() {
+  const now = performance.now();
+  const dt = _windLast === null ? 0 : Math.min(0.1, (now - _windLast) / 1000);
+  _windLast = now;
+  let any = false;
+  if (WIND && isWind()) {
+    const w = windNow();
+    const rate = WIND_SPEEDUP * Math.max(0.5, w.speed) / WIND.spacing_k1_m;
+    for (const p of windPrims.values()) {
+      if (!p.show) continue;
+      any = true;
+      p.phase += dt * rate;
+      p.speed = w.speed;
+    }
+  }
+  if (!any || dt === 0 || document.hidden) { _fpsAcc = 0; _fpsN = 0; _fpsSince = now; return; }
+  _fpsAcc += dt; _fpsN++;
+  if (now - _fpsSince > 2500) {
+    const fps = _fpsN / Math.max(1e-3, _fpsAcc);
+    if (fps < 24 && windDensity > 0.2) {
+      windDensity /= 2; windThinned = true;
+      for (const p of windPrims.values()) p.fraction = windDensity;
+      renderLegend();
+    }
+    _fpsAcc = 0; _fpsN = 0; _fpsSince = now;
+  }
+}
+
+// The basemap is dimmed under the wind so the moving light reads.
+let _baseSaved = null;
+function windBasemap(on) {
+  const base = viewer && viewer.imageryLayers.length ? viewer.imageryLayers.get(0) : null;
+  if (!base) return;
+  if (on && !_baseSaved) {
+    _baseSaved = { b: base.brightness, s: base.saturation, c: base.contrast };
+    base.brightness = 0.42; base.saturation = 0.25; base.contrast = 1.15;
+  } else if (!on && _baseSaved) {
+    base.brightness = _baseSaved.b; base.saturation = _baseSaved.s; base.contrast = _baseSaved.c;
+    _baseSaved = null;
+  }
+}
+
+function windSpeedLabel(k, v) { return (k * v).toFixed(1); }
+
+function renderWindLegend() {
+  const w = windNow(), run = currentWindRun();
+  const V = Math.max(0.5, w.speed);
+  const rows = WIND.legend.slice().reverse().map(e => {
+    const lab = e.max >= 3.9 ? `over ${windSpeedLabel(e.min, V)} m/s`
+      : `${windSpeedLabel(e.min, V)} to ${windSpeedLabel(e.max, V)} m/s`;
+    const note = e.min <= 1 && e.max > 1 ? "open lawn" : (e.max <= 0.4 ? "sheltered" : (e.min >= 1.5 ? "gusty corner" : ""));
+    return `<div class="row"><span class="sw" style="background:${e.color}"></span>${lab}` +
+      (note ? ` <span style="color:#79828f;font-size:9.5px">&nbsp;${note}</span>` : "") + `</div>`;
+  });
+  $("legtitle").textContent = "Wind at street level";
+  $("legunits").textContent = (w.live ? "live, " : "") +
+    `from the ${compass16(w.dir)} (${Math.round(w.dir)}°), ${fmt(V, 1)} m/s on the open lawn` +
+    (w.live ? "" : `, ${hseason().label.toLowerCase()} ${hstep().time} EST`);
+  const lines = windAnim ? `<div style="margin-top:8px;color:#79828f;font-size:9.5px;line-height:1.5">
+    Lines follow the simulated wind 2.5 m up and through the air around the towers. The light
+    moves at the wind's speed, ${WIND_SPEEDUP} times faster than real.
+    ${windThinned ? " Fewer lines on this device to keep it smooth." : ""}</div>` : "";
+  const grown = HEAT.towers && HEAT.towers.length
+    ? `<div class="row" style="margin-top:6px"><span class="sw" style="background:${GROWN_CSS}"></span>
+       grew since 2017</div>` : "";
+  $("legrows").innerHTML = rows.join("") + grown + lines +
+    (run && Math.abs(((run.dir - w.dir) % 360 + 540) % 360 - 180) > 0.5
+      ? `<div style="margin-top:6px;color:#79828f;font-size:9.5px">Nearest simulated direction: ${run.dir}°.</div>` : "");
+}
+
+function renderWindStats() {
+  const w = windNow(), run = currentWindRun();
+  const V = Math.max(0.5, w.speed);
+  const rows = [
+    [w.live ? "Live wind (10 m)" : "Station wind", `${compass16(w.dir)} ${fmt(w.speed, 1)} m/s`],
+    ["Typical spot in the park", run ? `${fmt(run.park_k_median * V, 1)} m/s` : "--"],
+    ["Windiest tenth of the park", run ? `over ${fmt(run.park_k_p90 * V, 1)} m/s` : "--"]
+  ];
+  if (w.live && windLive) rows.push(["Gusts", `${fmt(windLive.gust, 1)} m/s`],
+                                    ["Air temperature", `${fmt(windLive.ta, 1)} &deg;C`]);
+  else {
+    const ws = windHeatStep();
+    if (ws) rows.push(["Park feels like, with this wind", `${fmt(isTodayBuild()
+      ? ws.park_felt_today_c : ws.park_felt_2017_c, 1)} &deg;C`]);
+  }
+  $("statshead").textContent = w.live ? "Live now" : hseason().label;
+  $("statstable").innerHTML = rows
+    .map(([k, v]) => `<tr><td class="k">${k}</td><td class="v">${v}</td></tr>`).join("");
+  $("statscope").innerHTML = (windLiveErr && windLiveMode ? `<b>${windLiveErr}.</b> ` : "") +
+    (w.live ? `Open-Meteo (NOAA HRRR model), ${windLive ? windLive.time.replace("T", " ") : ""} New York time. ` : "") +
+    `Central Park within 1.5 km of 59th Street. Time-mean wind from a 3D simulation on 8 m cells,
+     as a ratio to the park's open lawns, which get the ${w.live ? "live" : "weather station's"} wind.`;
 }
 
 /* ------------------------------------------------------------------ *
@@ -730,7 +1156,8 @@ function renderCopy() {
   $("hdrsub").textContent =
     `${size} at ${s.cellsize_m} m per cell \u00b7 ` +
     `tallest object in frame ${s.tallest_m} m (${s.tallest_ft} ft) \u00b7 looking up the avenues`;
-  $("hdrcav").textContent = isHeat() ? HEAT_CAVEAT : SHADE_CAVEAT;
+  $("hdrcav").textContent = isWind() ? WIND_CAVEAT
+    : isHeat() ? (WIND && feltIsLocal() ? HEAT_CAVEAT_LOCAL : HEAT_CAVEAT) : SHADE_CAVEAT;
   $("hdrby").innerHTML =
     `built by <b>Adel</b> &middot; <a id="openabout">how it works and what it is not</a>`
     + ` &middot; <a href="https://github.com/adelyasser00/shadow-twin" target="_blank" rel="noopener">source</a>`;
@@ -836,9 +1263,37 @@ function renderCopy() {
     them would imply detail that is not in the survey.</p>
 
     ${HEAT ? heatAbout() : ""}
+    ${WIND ? windAbout() : ""}
 
     <div class="k">Generated</div>
     <p><code>${DATA.generated_utc}</code></p>`;
+}
+
+function windAbout() {
+  return `
+    <div class="k">Wind layer: model estimate</div>
+    <p><b>Wind</b> comes from a 3D simulation of the air moving through these
+    buildings and trees (lattice Boltzmann with a large eddy model, on 8 m cells,
+    run on a laptop GPU), one run per wind direction, for 2017 and for today.
+    The page does not simulate anything: it plays the result back. Each line
+    follows the time-averaged wind, and the light on it moves at the simulated
+    speed, ${WIND_SPEEDUP} times faster than real.</p>
+    <p>The simulation gives ratios: how windy each spot is compared with the
+    park's open lawns. The open lawns get the weather station's wind, and every
+    other spot that wind times its ratio. <b>Live now</b> uses the current wind
+    from Open-Meteo (NOAA's HRRR model) and the simulated direction nearest to it.</p>
+    <p>With wind on, <b>Feels like</b> uses the wind at each spot instead of one
+    wind for the whole park, recomputed with SOLWEIG's own UTCI code; the button
+    "Felt: one wind for the park" switches back.</p>
+    <ul>
+      <li>8 m cells resolve where towers pull wind down, wakes and sheltered
+          lawns, not the gust at one street corner. Not a pedestrian wind
+          comfort study.</li>
+      <li>Time-mean wind, not gusts. Trees slow the wind as a porous canopy, bare
+          in winter.</li>
+      <li>The absolute wind speed is the least certain number: the Central Park
+          station is known to read low. Read ratios and changes first.</li>
+    </ul>`;
 }
 
 function heatAbout() {
@@ -877,8 +1332,9 @@ function heatAbout() {
  * Overlay
  * ------------------------------------------------------------------ */
 function currentImage() {
+  if (isWind()) { const r = currentWindRun(); return r ? r.img : hstep().img.change; }
   if (isHeat()) {
-    const im = hstep().img;
+    const im = feltStep().img;
     if (activeLayer === "change") return im.change;
     return isTodayBuild() ? im.today : im.y2017;
   }
@@ -903,7 +1359,7 @@ async function drawOverlay() {
   }
   if (my !== _overlaySeq) return;
   const next = viewer.imageryLayers.addImageryProvider(provider);
-  next.alpha = opacity;
+  next.alpha = overlayAlpha();
   next.magnificationFilter = Cesium.TextureMagnificationFilter.NEAREST;
   if (overlayLayer) viewer.imageryLayers.remove(overlayLayer, true);
   overlayLayer = next;
@@ -1100,6 +1556,12 @@ function renderStats() {
 
 function renderRecBadge() {
   const d = day();
+  if (isWind()) {
+    const w = windNow();
+    $("recbadge").innerHTML = `<b>Central Park</b> &nbsp; wind from the ${compass16(w.dir)}, ` +
+      `${fmt(w.speed, 1)} m/s &nbsp; <span>${w.live ? "live" : hstep().time + " EST"}</span>`;
+    return;
+  }
   if (isHeat()) {
     const what = activeLayer === "change" ? "colder than in 2017"
       : `feels like, ${isTodayBuild() ? "today" : "2017"}`;
@@ -1141,15 +1603,21 @@ function placeInfo() {
 
 function refresh() {
   drawOverlay(); renderLegend(); renderStats(); renderRecBadge(); updateCompass(true);
-  updateColumns();
-  $("hdrcav").textContent = isHeat() ? HEAT_CAVEAT : SHADE_CAVEAT;
+  updateColumns(); updateWindLines(); windBasemap(isWind());
+  if (HEAT) $("tcols").style.display = isFelt() ? "" : "none";
+  if (WINDHEAT) $("tlocal").style.display = isFelt() ? "" : "none";
+  if (WIND) { $("twind").style.display = isWind() ? "" : "none"; $("tair").style.display = isWind() ? "" : "none"; }
+  if (overlayLayer) overlayLayer.alpha = overlayAlpha();
+  $("hdrcav").textContent = isWind() ? WIND_CAVEAT
+    : isHeat() ? (WIND && feltIsLocal() ? HEAT_CAVEAT_LOCAL : HEAT_CAVEAT) : SHADE_CAVEAT;
   requestAnimationFrame(placeInfo); refreshSplit();
 }
 
 function setLayer(name) {
   if (name === "svf" && !hasSvf()) return;
   if ((name === "felt" || name === "change") && !HEAT) return;
-  const wasHeat = isHeat();
+  if (name === "wind" && !WIND) return;
+  const wasHeat = isHeat(), wasWind = isWind();
   activeLayer = name;
   document.querySelectorAll("#layerseg button").forEach(b =>
     b.classList.toggle("on", b.dataset.layer === name));
@@ -1158,11 +1626,15 @@ function setLayer(name) {
   $("play").style.opacity = timeActive ? "1" : ".35";
   $("play").style.pointerEvents = timeActive ? "auto" : "none";
   if (!timeActive) stopPlay();
-  if (wasHeat !== isHeat()) {
+  if (wasWind !== isWind()) {
+    if (!isWind() && windLiveMode) setLive(false);
+    if (isWind()) $("timesl").classList.toggle("off", windLiveMode);
+  }
+  if (wasHeat !== isHeat() || wasWind !== isWind()) {
     // The heat layers run on their own days and hours.
     stopPlay();
     renderDaySeg();
-    heatBuildings(isHeat());
+    if (wasHeat !== isHeat()) heatBuildings(isHeat());
     $("time").max = nSteps() - 1;
     if (isHeat()) prefetchHeat();
     setHour(isHeat() ? Math.min(heatStep, nSteps() - 1) : hourIndex);
@@ -1185,6 +1657,12 @@ function prefetchDay(d) {
 }
 
 function setDay(i) {
+  if (isWind() && i >= HEAT.seasons.length) {
+    document.querySelectorAll("#dayseg button").forEach((b, j) => b.classList.toggle("on", j === i));
+    setLive(true);
+    return;
+  }
+  if (isWind() && windLiveMode) { windLiveMode = false; setLive(false); }
   if (isHeat()) {
     const first = heatSeason !== i;
     heatSeason = i;
@@ -1235,6 +1713,7 @@ function stopPlay() {
 
 function togglePlay() {
   if (playing) return stopPlay();
+  if (isWind() && windLiveMode) return;
   playing = true;
   $("play").classList.add("on");
   $("play").textContent = "Stop";
@@ -1279,13 +1758,28 @@ function wireUp() {
     updateColumns(); updateColumns2(); renderLegend();
   });
 
+  $("twind").addEventListener("click", () => {
+    windAnim = !windAnim;
+    setToggle("twind", windAnim, "Wind animation on", "Wind animation off");
+    updateWindLines(); if (isWind()) { renderLegend(); if (overlayLayer) overlayLayer.alpha = overlayAlpha(); }
+  });
+  $("tair").addEventListener("click", () => {
+    windAir = !windAir;
+    setToggle("tair", windAir, "3D air lines on", "3D air lines off");
+    updateWindLines();
+  });
+  $("tlocal").addEventListener("click", () => {
+    localWind = !localWind;
+    setToggle("tlocal", localWind, "Felt: wind at each spot", "Felt: one wind for the park");
+    if (isFelt()) { prefetchHeat(); refresh(); }
+  });
   $("time").addEventListener("input", e => { stopPlay(); setHour(+e.target.value); });
   $("play").addEventListener("click", togglePlay);
   $("op").addEventListener("input", e => {
     opacity = +e.target.value / 100;
     $("opval").textContent = e.target.value + "%";
-    if (overlayLayer) overlayLayer.alpha = opacity;
-    if (overlay2) overlay2.alpha = opacity;
+    if (overlayLayer) overlayLayer.alpha = overlayAlpha();
+    if (overlay2) overlay2.alpha = overlayAlpha();
   });
   document.querySelectorAll("#layerseg button").forEach(b => {
     if (b.dataset.layer === "svf" && !hasSvf()) { b.style.display = "none"; return; }
@@ -1537,9 +2031,11 @@ async function start() {
       }))),
     animation: false, timeline: false, geocoder: false, homeButton: false,
     sceneModePicker: false, baseLayerPicker: false, navigationHelpButton: false,
-    fullscreenButton: false, infoBox: false, selectionIndicator: false
+    fullscreenButton: false, infoBox: false, selectionIndicator: false,
+    orderIndependentTranslucency: false
   });
   viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#1d2129");
+  viewer.scene.preRender.addEventListener(windTick);
   viewer.scene.globe.depthTestAgainstTerrain = true;
   viewer.scene.fog.enabled = true;
   $("tsplit").style.opacity = ".4";
@@ -1549,17 +2045,20 @@ async function start() {
   // buildings in their heat colours from the start, so nothing is rebuilt.
   const q0 = new URLSearchParams(location.search);
   const L0 = q0.get("layer");
-  if (L0 === "felt" || L0 === "change") {
+  if (q0.get("anim") === "0") windAnim = false;
+  if (q0.get("anim") === "1") windAnim = true;
+  if (q0.get("localwind") === "0") localWind = false;
+  if (L0 === "felt" || L0 === "change" || L0 === "wind") {
     const h = await _heatFetch;
     if (h) {
       HEAT = h;
       const si = HEAT.seasons.findIndex(s => s.id === q0.get("season"));
       heatSeason = si >= 0 ? si : 0;
       heatStep = worstStep(HEAT.seasons[heatSeason]);
-      activeLayer = L0;
+      activeLayer = L0 === "wind" ? "felt" : L0;
       if (hasFacades()) { savedBuildMode = buildMode; buildMode = "flat"; }
       document.querySelectorAll("#layerseg button").forEach(b =>
-        b.classList.toggle("on", b.dataset.layer === L0));
+        b.classList.toggle("on", b.dataset.layer === activeLayer));
     }
   }
   renderCopy();
@@ -1574,8 +2073,9 @@ async function start() {
   // Heat layers are optional and live in their own file next to the page.
   // URL options make the views scriptable for screenshots:
   //   ?layer=felt|change  &season=dec|jun  &t=14:30  &rec=1  &cols=0
-  loadHeat().then(ok => {
+  loadHeat().then(async ok => {
     if (!ok) return;
+    await loadWind();
     const q = new URLSearchParams(location.search);
     if (!isHeat()) {
       heatStep = worstStep(HEAT.seasons[0]);
@@ -1585,10 +2085,12 @@ async function start() {
     if (q.get("cols") === "0") { showCols = false; $("tcols").classList.remove("on");
                                  $("tcols").textContent = "3D columns off"; }
     const L = q.get("layer");
-    if (L === "felt" || L === "change") {
+    if (L === "felt" || L === "change" || (L === "wind" && WIND)) {
+      if (L === "wind" && activeLayer === "wind") { activeLayer = "felt"; }
       setLayer(L);
       const ti = hseason().steps.findIndex(s => s.time === q.get("t"));
       if (ti >= 0) setHour(ti);
+      if (L === "wind" && q.get("season") === "live") setDay(HEAT.seasons.length);
     }
     if (q.get("rec") === "1" && !recMode) toggleRec();
   });
@@ -1714,19 +2216,21 @@ let src2 = null, overlay2 = null, removeSync = null;
 const colCache2 = new Map();
 function updateColumns2() {
   if (!viewer2) return;
-  const want = !!HEAT && isHeat() && showCols;
+  const want = !!HEAT && isFelt() && showCols;
   const scen = isTodayBuild() ? "y2017" : "today";
+  const lw = want && feltIsLocal() ? "w" : "";
   const key = !want ? null : activeLayer === "felt"
-    ? `felt:${scen}:${heatSeason}:${heatStep}` : `chg:${heatSeason}:${heatStep}`;
+    ? `felt${lw}:${scen}:${heatSeason}:${heatStep}` : `chg${lw}:${heatSeason}:${heatStep}`;
   for (const [k, p] of colCache2) p.show = (k === key);
   if (!want || colCache2.has(key)) return;
+  const fs = feltStep();
   if (activeLayer === "felt") {
-    const vals = hstep().felt2 && hstep().felt2[scen];
+    const vals = fs.felt2 && fs.felt2[scen];
     if (!vals || !HEAT.sections) return;
     colCache2.set(key, viewer2.scene.primitives.add(buildFeltHeatmap(vals)));
     return;
   }
-  const cols = hstep().cols;
+  const cols = fs.cols;
   if (!cols || !cols.length) return;
   colCache2.set(key, viewer2.scene.primitives.add(buildColumns(cols)));
 }
@@ -1756,10 +2260,16 @@ async function refreshSplit() {
   if (!viewer2 || !DATA2) return;
   const d2 = DATA2.days.find(x => x.id === day().id) || DATA2.days[0];
   let url, bs = DATA2.site.bounds;
-  if (isHeat()) {
+  if (isWind()) {
+    const w = windNow();
+    const r = windRunFor(isTodayBuild() ? "2017" : "today", w.season, w.dir);
+    url = r ? r.img : hstep().img.change;
+    bs = HEAT.bounds;
+  }
+  else if (isHeat()) {
     // Both scenarios live in heat.json: the right pane shows the other year's
     // felt temperature, or the same change map.
-    const im = hstep().img;
+    const im = feltStep().img;
     url = activeLayer === "change" ? im.change : (isTodayBuild() ? im.y2017 : im.today);
     bs = HEAT.bounds;
   }
@@ -1771,7 +2281,7 @@ async function refreshSplit() {
     ? await Cesium.SingleTileImageryProvider.fromUrl(url, { rectangle: rect })
     : new Cesium.SingleTileImageryProvider({ url, rectangle: rect });
   const next = viewer2.imageryLayers.addImageryProvider(prov);
-  next.alpha = opacity;
+  next.alpha = overlayAlpha();
   next.magnificationFilter = Cesium.TextureMagnificationFilter.NEAREST;
   if (overlay2) viewer2.imageryLayers.remove(overlay2, true);
   overlay2 = next;
