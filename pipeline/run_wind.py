@@ -42,6 +42,7 @@ U_TOP = 0.09                    # lattice speed at the lid: Mach 0.16
 SPINUP = 1.0                    # flow-throughs before averaging starts (the box starts at the inlet profile)
 AVERAGE = 1.5                   # flow-throughs averaged
 ACC_EVERY = 4                   # sample every 4th step
+Z0_M = 0.1                      # roughness length of ground and roofs for the wall drag
 SAVE_LAYERS_M = 520.0           # keep the 3D mean field up to this height
 
 # The heat day (18 December of the typical year) blows from 302 to 325 degrees
@@ -77,7 +78,7 @@ def one(scenario, theta, res=8.0, season="dec", box=BOX, tag="", log=print, forc
     h_lid = (nz - gk) * res
     prof = power_profile(nz, gk, U_TOP, (nz - gk), ALPHA)
     prof[:gk] = 0.0
-    s = Solver(solid, prof, veg=veg, log=log)
+    s = Solver(solid, prof, veg=veg, res_m=res, z0_m=Z0_M, log=log)
     u_mean = float(prof[gk:].mean())
     ft = bx.nx / u_mean
     n_spin = int(SPINUP * ft)
@@ -104,9 +105,10 @@ def one(scenario, theta, res=8.0, season="dec", box=BOX, tag="", log=print, forc
     ground_cols = ~cols["roof"]
     ground_cols[:, :INLET_SKIP] = False
     ground_cols[:, -INLET_SKIP:] = False
-    rel = np.abs(sp1 - sp2)[ground_cols] / np.maximum((sp1 + sp2)[ground_cols] / 2, 1e-4)
-    conv = {"median_rel_diff": round(float(np.median(rel)), 4),
-            "p90_rel_diff": round(float(np.percentile(rel, 90)), 4)}
+    d = np.abs(sp1 - sp2)[ground_cols]
+    typical = float(np.median((sp1 + sp2)[ground_cols] / 2))
+    conv = {"median_abs_diff_over_median_speed": round(float(np.median(d)) / typical, 4),
+            "p90_abs_diff_over_median_speed": round(float(np.percentile(d, 90)) / typical, 4)}
     nsave = min(nz, int(round(SAVE_LAYERS_M / res)) + 1 + gk)
     os.makedirs(out_dir, exist_ok=True)
     street = street_layer(mean, kf)
@@ -123,6 +125,7 @@ def one(scenario, theta, res=8.0, season="dec", box=BOX, tag="", log=print, forc
             "box": bx.meta(), "box_size": box, "gmin_m": cols["gmin"], "ground_layer": gk,
             "lid_above_ground_m": h_lid, "profile": {"alpha": ALPHA, "u_top": U_TOP},
             "tau0": 0.5005, "smagorinsky": 0.17, "leaf_area_density": LAD[season],
+            "walls": "slip + wall-law drag", "z0_m": Z0_M, "wall_cd": round(s.cd_wall, 5),
             "flow_through_steps": round(ft), "spinup_steps": n_spin, "average_steps": n_avg,
             "samples": int(k_full), "accumulate_every": ACC_EVERY, "saved_layers": nsave,
             "mlups": [round(m) for m in mlups], "device": s.device_name,
@@ -131,7 +134,7 @@ def one(scenario, theta, res=8.0, season="dec", box=BOX, tag="", log=print, forc
     with open(os.path.join(out_dir, "run.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(meta, f, indent=1)
     log(f"  {os.path.basename(out_dir)}: done in {meta['wall_s']} s at {np.mean(mlups):.0f} MLUPs; "
-        f"street speed halves differ by {conv['median_rel_diff'] * 100:.1f}% (median)")
+        f"street speed halves differ by {conv['median_abs_diff_over_median_speed'] * 100:.1f}% of the typical speed (median)")
     del s
     return out_dir
 
@@ -140,14 +143,24 @@ INLET_SKIP = 12
 
 
 def queue(name):
-    if name == "hero":
-        return [("today", HERO, 8.0, BOX, ""), ("2017", HERO, 8.0, BOX, "")]
-    if name == "library":
-        return ([("today", d, 8.0, BOX, "") for d in LIBRARY]
-                + [("2017", d, 8.0, BOX, "") for d in LIBRARY])
-    if name == "grid":
-        return [("today", HERO, 8.0, SMALL_BOX, "_small"), ("today", HERO, 6.0, SMALL_BOX, "_small")]
-    raise SystemExit(f"unknown queue {name}")
+    """Named batches, in the order they are worth running."""
+    nw = [292.5, 337.5, 270.0]
+    rest = [d for d in LIBRARY if d not in nw]
+    q = {
+        "hero": [("today", HERO, 8.0, BOX, "", "dec"), ("2017", HERO, 8.0, BOX, "", "dec")],
+        "today-nw": [("today", d, 8.0, BOX, "", "dec") for d in nw],
+        "grid": [("today", HERO, 8.0, SMALL_BOX, "_small", "dec"),
+                 ("today", HERO, 6.0, SMALL_BOX, "_small", "dec")],
+        "today-rest": [("today", d, 8.0, BOX, "", "dec") for d in rest],
+        # The June control day blows from 250 to 270 degrees; trees in leaf.
+        "june": [(sc, d, 8.0, BOX, "", "jun") for d in (247.5, 270.0) for sc in ("today", "2017")],
+        "2017-lib": [("2017", d, 8.0, BOX, "", "dec") for d in LIBRARY],
+    }
+    if name == "all":
+        return [j for k in ("hero", "today-nw", "grid", "today-rest", "june", "2017-lib") for j in q[k]]
+    if name not in q:
+        raise SystemExit(f"unknown queue {name}; one of {', '.join(q)} or all")
+    return q[name]
 
 
 def main():
@@ -156,7 +169,7 @@ def main():
     ap.add_argument("--dir", type=float, nargs="*")
     ap.add_argument("--res", type=float, default=8.0)
     ap.add_argument("--season", default="dec", choices=("dec", "jun"))
-    ap.add_argument("--queue", nargs="*", help="hero, grid, library (in that order if several)")
+    ap.add_argument("--queue", nargs="*", help="hero, today-nw, grid, today-rest, june, 2017-lib, or all")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
     t0 = time.time()
@@ -168,9 +181,9 @@ def main():
     for q in args.queue or []:
         jobs += queue(q)
     if args.scenario:
-        jobs += [(args.scenario, d, args.res, BOX, "") for d in (args.dir or [HERO])]
-    for sc, d, res, box, tag in jobs:
-        one(sc, d, res, args.season, box, tag, log=log, force=args.force)
+        jobs += [(args.scenario, d, args.res, BOX, "", args.season) for d in (args.dir or [HERO])]
+    for sc, d, res, box, tag, season in jobs:
+        one(sc, d, res, season, box, tag, log=log, force=args.force)
     log("done")
     return 0
 
