@@ -27,17 +27,22 @@ sys.path.insert(0, os.path.join(HERE, "tools"))
 from compose_linkedin import (GROWN, INK, MUTED, SAFE, W, H, font, pill, shade, wrap)  # noqa: E402
 
 FIG = os.path.join(HERE, "data", "wind", "figures", "post")
-NUMBERS = os.path.join(HERE, "data", "wind", "wind_numbers.csv")
+NUMBERS = [os.path.join(HERE, "data", "wind", "wind_numbers.csv"),
+           os.path.join(HERE, "data", "wind", "wind_story.csv")]
 WIND_BLUE = "#7fd3f0"
 
 # Words for the image. The number comes from the CSV.
-TITLE = "How the wind moves through Billionaires' Row"
-SUB = ("A cold northwester crossing Central Park, simulated in 3D. "
-       "Light moves at the wind's speed. Amber: towers that grew since 2017.")
-NUMBER_KEY = None              # e.g. "dec_1230_wind_part_median_c"; None: no number box
-NUMBER_FMT = "{:+.1f} °C"
-NUMBER_LINES = ["", ""]
-CALLOUTS = []                   # (text, (x, y) anchor in the render, side "l"|"r")
+TITLE = "The new towers pull the wind|down to the street"
+SUB = ("A cold December northwester crossing Central Park, simulated in 3D. "
+       "The light moves with the wind. Amber: towers that grew since 2017.")
+NUMBER_KEY = "central_park_tower_street_change_pct"
+NUMBER_FMT = "+{:.0f}%"
+NUMBER_LINES = ["street wind at the foot of", "Central Park Tower vs 2017"]
+CALLOUTS = []
+# Tower name rows above the roofs for the upwindP camera.
+LABELS = [("Central Park Tower", 0, SAFE[2], "rm"),
+          ("Steinway Tower", 1, 795, "rm"),
+          ("53 W 53rd", 1, 835, "lm")]                   # (text, (x, y) anchor in the render, side "l"|"r")
 SOURCE = ["Time-mean wind, 8 m cells, lattice Boltzmann LES on a laptop GPU. 2017 LiDAR vs today.",
           "Wind from the Central Park typical year, clear 18 December. Map © OpenStreetMap."]
 NAMES = [((-73.98102, 40.76644), "Central Park Tower"),
@@ -47,10 +52,11 @@ NAMES = [((-73.98102, 40.76644), "Central Park Tower"),
 
 def numbers():
     rows = {}
-    if os.path.exists(NUMBERS):
-        with open(NUMBERS, encoding="utf-8") as f:
-            for r in csv.DictReader(f):
-                rows[r["key"]] = r
+    for p in NUMBERS:
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                for r in csv.DictReader(f):
+                    rows[r["key"]] = r
     return rows
 
 
@@ -84,10 +90,10 @@ def compose(raw_path):
         img = img.resize((W, H), Image.LANCZOS)
     d = ImageDraw.Draw(img)
     size = 48
-    while size > 40 and d.textlength(TITLE, font=font(size, True)) > 880:
+    while size > 40 and max(d.textlength(t, font=font(size, True)) for t in TITLE.split("|")) > 880:
         size -= 1
     f_t, f_s = font(size, True), font(25)
-    lt = wrap(d, TITLE, f_t, 880)
+    lt = [ln for part in TITLE.split("|") for ln in wrap(d, part, f_t, 880)]
     ls = wrap(d, SUB, f_s, 880)
     top = SAFE[1] - 10
     ys = top + len(lt) * 56 + 6
@@ -101,23 +107,32 @@ def compose(raw_path):
     rows = numbers()
     if NUMBER_KEY and NUMBER_KEY in rows:
         v = float(rows[NUMBER_KEY]["value"])
-        nb = (SAFE[2] - 262, card[3] + 40, SAFE[2] + 14, card[3] + 180)
+        # Left, under the title: it covers only Upper West Side rooftops.
+        nb = (SAFE[0] - 14, card[3] + 28, SAFE[0] + 300, card[3] + 176)
         img = shade(img, nb, alpha=222, radius=14)
         d = ImageDraw.Draw(img)
-        d.text((SAFE[2], nb[1] + 2), NUMBER_FMT.format(v), font=font(62, True), fill=WIND_BLUE, anchor="ra")
+        d.text((SAFE[0], nb[1] + 2), NUMBER_FMT.format(v), font=font(62, True), fill=WIND_BLUE, anchor="la")
         for i, s in enumerate(NUMBER_LINES):
-            d.text((SAFE[2], nb[1] + 78 + 28 * i), s, font=font(23), fill=INK, anchor="ra")
-    # Tower names on their roofs.
+            d.text((SAFE[0], nb[1] + 80 + 28 * i), s, font=font(23), fill=INK, anchor="la")
+    # Tower names above their roofs, with leader lines: (name, row, anchor x, anchor).
+    roofs = {}
     for t in meta.get("towers", []):
         nm = tower_name(t["lonlat"])
-        if not nm or t["x"] is None:
+        if nm and t["x"] is not None:
+            roofs[nm] = (int(t["x"] * W / meta["size"][0]), int(t["y"] * H / meta["size"][1]))
+    f_l = font(23, True)
+    for nm, row, ax, anchor in LABELS:
+        if nm not in roofs:
             continue
-        x, y = int(t["x"] * W / meta["size"][0]), int(t["y"] * H / meta["size"][1])
-        if not (SAFE[0] < x < SAFE[2] and SAFE[1] < y < SAFE[3]):
-            continue
-        img = pill(img, (x, y - 30), nm, font(23, True), fg=GROWN, anchor="mm")
+        rx, ry = roofs[nm]
+        y = card[3] + 50 + 46 * row
+        tw = ImageDraw.Draw(img).textlength(nm, font=f_l)
+        x0 = ax - tw - 24 if anchor == "rm" else ax
+        ex = x0 + tw + 24 if rx > x0 + tw + 24 else (x0 if rx < x0 else rx)
         d = ImageDraw.Draw(img)
-        d.ellipse((x - 5, y - 5, x + 5, y + 5), fill=GROWN)
+        d.line((ex, y + 16 if ry > y else y, rx, ry - 4), fill=GROWN, width=3)
+        d.ellipse((rx - 5, ry - 5, rx + 5, ry + 5), fill=GROWN)
+        img = pill(img, (ax, y), nm, f_l, fg=GROWN, anchor=anchor)
     for text, (x, y), side in CALLOUTS:
         img = pill(img, (x, y), text, font(23), anchor="lm" if side == "r" else "rm")
     f = font(22)
