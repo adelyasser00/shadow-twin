@@ -34,13 +34,14 @@ from datetime import datetime
 import numpy as np
 
 from .wind_domain import BOX, LAD, WIND_DIR, load_canvas, voxelise
-from .wind_lbm import Solver, power_profile
+from .wind_lbm import InflowTurbulence, Solver, power_profile
 
 RUNS_DIR = os.path.join(WIND_DIR, "runs")
 ALPHA = 0.28
 U_TOP = 0.09                    # lattice speed at the lid: Mach 0.16
 SPINUP = 1.0                    # flow-throughs before averaging starts (the box starts at the inlet profile)
-AVERAGE = 1.5                   # flow-throughs averaged
+AVERAGE = 1.5                   # flow-throughs averaged, library runs
+AVERAGE_HERO = 3.0              # the runs every published number comes from
 ACC_EVERY = 4                   # sample every 4th step
 Z0_M = 0.1                      # roughness length of ground and roofs for the wall drag
 SAVE_LAYERS_M = 520.0           # keep the 3D mean field up to this height
@@ -65,11 +66,24 @@ def street_layer(arr, kfirst):
     return np.take_along_axis(arr, k, axis=1)[:, 0]
 
 
-def one(scenario, theta, res=8.0, season="dec", box=BOX, tag="", log=print, force=False):
+def one(scenario, theta, res=8.0, season="dec", box=BOX, tag="", log=print, force=False,
+        average=AVERAGE, turbulence=True):
     out_dir = os.path.join(RUNS_DIR, run_name(scenario, season, theta, res, tag))
-    if os.path.exists(os.path.join(out_dir, "run.json")) and not force:
-        log(f"  {os.path.basename(out_dir)}: already done")
-        return out_dir
+    done = os.path.join(out_dir, "run.json")
+    if os.path.exists(done) and not force:
+        with open(done, encoding="utf-8") as f:
+            old = json.load(f)
+        had = old["average_steps"] / max(1, old["flow_through_steps"])
+        if had >= average - 0.05:
+            log(f"  {os.path.basename(out_dir)}: already done")
+            return out_dir
+        # A shorter average than now asked for: keep it aside, run again.
+        keep = os.path.join(WIND_DIR, "runs_superseded",
+                            f"{os.path.basename(out_dir)}_{datetime.now():%Y%m%d%H%M%S}")
+        os.makedirs(os.path.dirname(keep), exist_ok=True)
+        os.replace(out_dir, keep)
+        log(f"  {os.path.basename(out_dir)}: averaged {had:.1f} flow-throughs, {average:.1f} wanted; "
+            f"old run moved to {keep}")
     t0 = time.time()
     canvas, info = load_canvas()
     solid, veg, cols, bx = voxelise(canvas, info, theta, res, scenario, season, box)
@@ -78,11 +92,12 @@ def one(scenario, theta, res=8.0, season="dec", box=BOX, tag="", log=print, forc
     h_lid = (nz - gk) * res
     prof = power_profile(nz, gk, U_TOP, (nz - gk), ALPHA)
     prof[:gk] = 0.0
-    s = Solver(solid, prof, veg=veg, res_m=res, z0_m=Z0_M, log=log)
+    turb = InflowTurbulence(prof, gk, res, bx.ny) if turbulence else None
+    s = Solver(solid, prof, veg=veg, res_m=res, z0_m=Z0_M, turbulence=turb, log=log)
     u_mean = float(prof[gk:].mean())
     ft = bx.nx / u_mean
     n_spin = int(SPINUP * ft)
-    n_avg = int(AVERAGE * ft)
+    n_avg = int(average * ft)
     n_avg -= n_avg % (2 * ACC_EVERY)
     log(f"  {os.path.basename(out_dir)}: flow-through {ft:,.0f} steps; {n_spin:,} to settle, "
         f"{n_avg:,} averaged")
@@ -126,8 +141,9 @@ def one(scenario, theta, res=8.0, season="dec", box=BOX, tag="", log=print, forc
             "lid_above_ground_m": h_lid, "profile": {"alpha": ALPHA, "u_top": U_TOP},
             "tau0": 0.5005, "smagorinsky": 0.17, "leaf_area_density": LAD[season],
             "walls": "slip + wall-law drag", "z0_m": Z0_M, "wall_cd": round(s.cd_wall, 5),
+            "inflow_turbulence": bool(turbulence),
             "flow_through_steps": round(ft), "spinup_steps": n_spin, "average_steps": n_avg,
-            "samples": int(k_full), "accumulate_every": ACC_EVERY, "saved_layers": nsave,
+            "samples": int(k_full), "average_flow_throughs": average, "accumulate_every": ACC_EVERY, "saved_layers": nsave,
             "mlups": [round(m) for m in mlups], "device": s.device_name,
             "convergence_street_speed": conv, "wall_s": round(time.time() - t0),
             "generated": datetime.now().isoformat(timespec="seconds")}
@@ -147,17 +163,18 @@ def queue(name):
     nw = [292.5, 337.5, 270.0]
     rest = [d for d in LIBRARY if d not in nw]
     q = {
-        "hero": [("today", HERO, 8.0, BOX, "", "dec"), ("2017", HERO, 8.0, BOX, "", "dec")],
-        "today-nw": [("today", d, 8.0, BOX, "", "dec") for d in nw],
-        "grid": [("today", HERO, 8.0, SMALL_BOX, "_small", "dec"),
-                 ("today", HERO, 6.0, SMALL_BOX, "_small", "dec")],
-        "today-rest": [("today", d, 8.0, BOX, "", "dec") for d in rest],
+        "hero": [("2017", HERO, 8.0, BOX, "", "dec", AVERAGE_HERO),
+                 ("today", HERO, 8.0, BOX, "", "dec", AVERAGE_HERO)],
+        "today-nw": [("today", d, 8.0, BOX, "", "dec", AVERAGE) for d in nw],
+        "grid": [("today", HERO, 8.0, SMALL_BOX, "_small", "dec", AVERAGE_HERO),
+                 ("today", HERO, 6.0, SMALL_BOX, "_small", "dec", AVERAGE_HERO)],
+        "today-rest": [("today", d, 8.0, BOX, "", "dec", AVERAGE) for d in rest],
         # The June control day blows from 250 to 270 degrees; trees in leaf.
-        "june": [(sc, d, 8.0, BOX, "", "jun") for d in (247.5, 270.0) for sc in ("today", "2017")],
-        "2017-lib": [("2017", d, 8.0, BOX, "", "dec") for d in LIBRARY],
+        "june": [(sc, d, 8.0, BOX, "", "jun", AVERAGE) for d in (247.5, 270.0) for sc in ("today", "2017")],
+        "2017-lib": [("2017", d, 8.0, BOX, "", "dec", AVERAGE) for d in LIBRARY],
     }
     if name == "all":
-        return [j for k in ("hero", "today-nw", "grid", "today-rest", "june", "2017-lib") for j in q[k]]
+        return [j for k in ("hero", "today-nw", "grid", "june", "today-rest", "2017-lib") for j in q[k]]
     if name not in q:
         raise SystemExit(f"unknown queue {name}; one of {', '.join(q)} or all")
     return q[name]
@@ -181,9 +198,9 @@ def main():
     for q in args.queue or []:
         jobs += queue(q)
     if args.scenario:
-        jobs += [(args.scenario, d, args.res, BOX, "", args.season) for d in (args.dir or [HERO])]
-    for sc, d, res, box, tag, season in jobs:
-        one(sc, d, res, season, box, tag, log=log, force=args.force)
+        jobs += [(args.scenario, d, args.res, BOX, "", args.season, AVERAGE) for d in (args.dir or [HERO])]
+    for sc, d, res, box, tag, season, average in jobs:
+        one(sc, d, res, season, box, tag, log=log, force=args.force, average=average)
     log("done")
     return 0
 

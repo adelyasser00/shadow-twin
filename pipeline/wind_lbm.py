@@ -24,7 +24,12 @@ The flow always enters at x = 0 and leaves at x = nx - 1. The city is turned
 under it for each wind direction (pipeline/wind_domain.py), so there is one
 inlet face and one outlet face.
 
-  inlet     equilibrium at the prescribed profile u(z), density 1
+  inlet     equilibrium at the prescribed profile u(z), density 1, plus
+            synthetic turbulence (InflowTurbulence): smooth inflow makes a
+            separated flow reattach far too late (a cube's wake is about
+            2.5 heights long in smooth flow, 1.4 in a turbulent boundary
+            layer), which left the park behind the Central Park West rooftops
+            too calm
   outlet    equilibrium at density 1 and the velocity one cell upstream
   sides     periodic
   top       free slip (mirror)
@@ -122,7 +127,8 @@ __kernel void init(__global half* f, __global float* u, __global const uchar* fl
 __kernel void step(__global const half* fa, __global half* fb,
                    __global const uchar* flag, __global const float* veg,
                    __global float* u, __global const float* prof,
-                   __global float* acc, const int accumulate) {
+                   __global float* acc, const int accumulate,
+                   __global const float* ta, __global const float* tb, const float tw) {
     const long n = get_global_id(0);
     if (n >= N) return;
     const uchar fl = flag[n];
@@ -134,7 +140,13 @@ __kernel void step(__global const half* fa, __global half* fb,
 
     if (fl == 2 || fl == 3) {
         rho = 1.0f;
-        if (fl == 2) { ux = prof[z]; uy = 0.0f; uz = 0.0f; }
+        if (fl == 2) {
+            // Profile plus turbulence, blended between two inflow slices.
+            const long q = (long)y + NY * (long)z, m2 = (long)NY * NZ;
+            ux = fmax(prof[z] + mix(ta[q], tb[q], tw), 0.0f);
+            uy = mix(ta[m2 + q], tb[m2 + q], tw);
+            uz = mix(ta[2 * m2 + q], tb[2 * m2 + q], tw);
+        }
         else {
             const long m = n - 1;
             ux = fmax(u[m], 0.0f); uy = u[N + m]; uz = u[2 * N + m];
@@ -235,7 +247,7 @@ class Solver:
     """
 
     def __init__(self, solid, profile, veg=None, tau0=0.5005, smag=CS_SMAGORINSKY,
-                 slip=True, z0_m=0.1, res_m=8.0, device=None, log=print):
+                 slip=True, z0_m=0.1, res_m=8.0, turbulence=None, device=None, log=print):
         import pyopencl as cl
         solid = np.ascontiguousarray(solid, dtype=bool)
         nz, ny, nx = solid.shape
@@ -288,6 +300,11 @@ class Solver:
         cl.enqueue_fill_buffer(self.queue, self.d_acc, np.float32(0), 0, NACC * 4 * n)
         self.gsize = (int(-(-n // 128) * 128),)
         self.lsize = (128,)
+        self.turb = turbulence
+        zero = np.zeros(3 * ny * nz, np.float32)
+        self.d_ta = cl.Buffer(self.ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=zero)
+        self.d_tb = cl.Buffer(self.ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=zero)
+        self._slice = None
         self.prg.init(self.queue, self.gsize, self.lsize, self.fa, self.d_u, self.d_flag, self.d_prof)
         self.queue.finish()
         self.steps_done = 0
@@ -303,8 +320,9 @@ class Solver:
         k = self.k_step
         for s in range(steps):
             acc = 1 if accumulate_every and (s % accumulate_every == 0) else 0
+            tw = self._inflow(self.steps_done + s)
             k(self.queue, self.gsize, self.lsize, self.fa, self.fb, self.d_flag, self.d_veg,
-              self.d_u, self.d_prof, self.d_acc, np.int32(acc))
+              self.d_u, self.d_prof, self.d_acc, np.int32(acc), self.d_ta, self.d_tb, np.float32(tw))
             self.fa, self.fb = self.fb, self.fa
             self.samples += acc
             if log_every and (s + 1) % log_every == 0:
@@ -316,6 +334,23 @@ class Solver:
         self.steps_done += steps
         el = time.time() - t
         return steps * self.n / max(el, 1e-9) / 1e6
+
+    def _inflow(self, step):
+        """Keep the two inflow slices around this step on the device; return the blend weight."""
+        import pyopencl as cl
+        if self.turb is None:
+            return 0.0
+        pos = step / self.turb.steps_per_slice
+        k = int(pos)
+        if k != self._slice:
+            if self._slice is not None and k == self._slice + 1:
+                self.d_ta, self.d_tb = self.d_tb, self.d_ta
+                cl.enqueue_copy(self.queue, self.d_tb, self.turb.slice(k + 1))
+            else:
+                cl.enqueue_copy(self.queue, self.d_ta, self.turb.slice(k))
+                cl.enqueue_copy(self.queue, self.d_tb, self.turb.slice(k + 1))
+            self._slice = k
+        return pos - k
 
     def velocity(self):
         import pyopencl as cl
@@ -359,6 +394,43 @@ def pick_device():
                               or "advanced micro" in d.vendor.lower()), d.global_mem_size),
               reverse=True)
     return pool[0]
+
+
+class InflowTurbulence:
+    """
+    Synthetic turbulence for the inlet: smooth random gusts with the size and
+    strength of a city's wind, frozen and carried in at the mean wind speed
+    (Taylor's hypothesis), repeating after `slices` cells of travel.
+
+    Strength: u fluctuates by I(h) = 0.30 (h / 10 m)^-0.25 times the mean,
+    held between 8% and 35% (rough city terrain); v by 0.75 and w by 0.5 of
+    that, the usual ratios in the atmospheric surface layer. Size: Gaussian
+    smoothing of white noise with sigma `sigma_m` (integral scale about 1.8
+    times sigma) along the wind, across it and up.
+    """
+
+    def __init__(self, profile, ground_k, res_m, ny, sigma_m=80.0, slices=256, seed=11):
+        from scipy.ndimage import gaussian_filter
+        nz = len(profile)
+        rng = np.random.default_rng(seed)
+        sg = sigma_m / res_m
+        f = rng.standard_normal((3, slices, nz, ny)).astype(np.float32)
+        for c in range(3):
+            f[c] = gaussian_filter(f[c], sigma=(sg, sg, sg), mode=("wrap", "nearest", "wrap"))
+            f[c] /= max(float(f[c].std()), 1e-9)
+        h = np.maximum((np.arange(nz) - ground_k + 0.5) * res_m, 0.5)
+        iu = np.clip(0.30 * (h / 10.0) ** -0.25, 0.08, 0.35)
+        sig = (iu * np.asarray(profile, np.float32)).astype(np.float32)
+        sig[:ground_k] = 0.0
+        for c, r in enumerate((1.0, 0.75, 0.5)):
+            f[c] *= (r * sig)[None, :, None]
+        self.field = f
+        self.slices = slices
+        u_conv = float(np.asarray(profile)[ground_k:].mean())
+        self.steps_per_slice = 1.0 / max(u_conv, 1e-4)      # one cell of travel per slice
+
+    def slice(self, k):
+        return np.ascontiguousarray(self.field[:, k % self.slices]).ravel()
 
 
 def wall_drag(z0_m, res_m):
