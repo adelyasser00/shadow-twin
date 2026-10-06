@@ -6,3 +6,5 @@ solweig==0.1.0b96
 websocket-client>=1.8
 # The UMEP reference check (V3) needs its own environment, see README:
 #   numpy<2.4  solweig==0.1.0b96  umep==0.0.1b47
+# Wind layer: the GPU solver runs through OpenCL (any GPU with a current driver)
+pyopencl>=2024.1
