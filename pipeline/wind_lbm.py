@@ -403,13 +403,15 @@ class InflowTurbulence:
     (Taylor's hypothesis), repeating after `slices` cells of travel.
 
     Strength: u fluctuates by I(h) = 0.30 (h / 10 m)^-0.25 times the mean,
-    held between 8% and 35% (rough city terrain); v by 0.75 and w by 0.5 of
-    that, the usual ratios in the atmospheric surface layer. Size: Gaussian
-    smoothing of white noise with sigma `sigma_m` (integral scale about 1.8
-    times sigma) along the wind, across it and up.
+    held between 8% and 35% (rough city terrain), or by `iu` (one intensity
+    per layer) where the inflow was measured, as in a wind tunnel benchmark;
+    v by 0.75 and w by 0.5 of that, the usual ratios in the atmospheric
+    surface layer. Size: Gaussian smoothing of white noise with sigma
+    `sigma_m` (integral scale about 1.8 times sigma) along the wind, across
+    it and up.
     """
 
-    def __init__(self, profile, ground_k, res_m, ny, sigma_m=80.0, slices=256, seed=11):
+    def __init__(self, profile, ground_k, res_m, ny, sigma_m=80.0, slices=256, seed=11, iu=None):
         from scipy.ndimage import gaussian_filter
         nz = len(profile)
         rng = np.random.default_rng(seed)
@@ -418,8 +420,10 @@ class InflowTurbulence:
         for c in range(3):
             f[c] = gaussian_filter(f[c], sigma=(sg, sg, sg), mode=("wrap", "nearest", "wrap"))
             f[c] /= max(float(f[c].std()), 1e-9)
-        h = np.maximum((np.arange(nz) - ground_k + 0.5) * res_m, 0.5)
-        iu = np.clip(0.30 * (h / 10.0) ** -0.25, 0.08, 0.35)
+        if iu is None:
+            h = np.maximum((np.arange(nz) - ground_k + 0.5) * res_m, 0.5)
+            iu = np.clip(0.30 * (h / 10.0) ** -0.25, 0.08, 0.35)
+        iu = np.asarray(iu, np.float32)
         sig = (iu * np.asarray(profile, np.float32)).astype(np.float32)
         sig[:ground_k] = 0.0
         for c, r in enumerate((1.0, 0.75, 0.5)):

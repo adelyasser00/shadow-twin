@@ -10,3 +10,5 @@ websocket-client>=1.8
 pyopencl>=2024.1
 # tools/clip_wind.py encodes MP4 with the ffmpeg this package ships
 imageio-ffmpeg>=0.5
+# tools/aij_case_d.py reads the AIJ wind tunnel benchmark's .xls
+xlrd>=2.0
