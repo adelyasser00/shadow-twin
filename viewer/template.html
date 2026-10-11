@@ -909,6 +909,9 @@ uniform float u_phase;
 uniform float u_period;
 uniform float u_speed;
 uniform float u_base;
+uniform float u_solid;
+uniform vec3 u_color;
+uniform vec3 u_rim;
 vec3 ramp(float t) {
   vec3 c0 = vec3(0.45, 0.66, 1.0);
   vec3 c1 = vec3(0.78, 0.92, 1.0);
@@ -921,6 +924,12 @@ vec3 ramp(float t) {
 }
 void main() {
   float edge = 1.0 - smoothstep(0.25, 1.0, abs(v_side));
+  if (u_solid > 0.5) {
+    // A core in u_color inside a thin rim in u_rim: reads on light and dark ground.
+    float core = 1.0 - smoothstep(0.42, 0.58, abs(v_side));
+    out_FragColor = vec4(mix(u_rim, u_color, core), 0.97 * (1.0 - smoothstep(0.82, 1.0, abs(v_side))));
+    return;
+  }
   float ph = fract((u_phase - v_tau) / u_period + v_ph);
   float comet = pow(1.0 - ph, 7.0);
   vec3 col = ramp(v_k * u_speed / 12.0);
@@ -928,9 +937,11 @@ void main() {
   out_FragColor = vec4(col, a);
 }`;
 
+// opts.solid: plain lines in opts.color (r, g, b in 0..1), normal blending and
+// no moving light, for still images; opts.width overrides the half-width.
 class WindLines {
-  constructor(lines, kind, origin, k1m) {
-    this.lines = lines; this.kind = kind; this.k1m = k1m;
+  constructor(lines, kind, origin, k1m, opts = {}) {
+    this.lines = lines; this.kind = kind; this.k1m = k1m; this.opts = opts;
     this.show = true; this.fraction = 1; this.phase = 0; this.speed = 5;
     this.modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
       Cesium.Cartesian3.fromDegrees(origin.lon, origin.lat, 0));
@@ -987,9 +998,13 @@ class WindLines {
     });
     this._sp = Cesium.ShaderProgram.fromCache({ context, vertexShaderSource: WIND_VS,
       fragmentShaderSource: WIND_FS, attributeLocations: { a_pos: 0, a_next: 1, a_aux: 2 } });
+    const solid = !!this.opts.solid;
     const rs = Cesium.RenderState.fromCache({ depthTest: { enabled: true }, depthMask: false,
-      blending: Cesium.BlendingState.ADDITIVE_BLEND, cull: { enabled: false } });
+      blending: solid ? Cesium.BlendingState.ALPHA_BLEND : Cesium.BlendingState.ADDITIVE_BLEND,
+      cull: { enabled: false } });
     const self = this, air = this.kind === "air";
+    const col = this.opts.color || [1, 1, 1];
+    const rim = this.opts.rim || col;
     const sphere = new Cesium.BoundingSphere(Cesium.Cartesian3.ZERO, Math.sqrt(r2) + 50);
     this._cmd = new Cesium.DrawCommand({
       modelMatrix: this.modelMatrix, vertexArray: this._va, shaderProgram: this._sp,
@@ -1001,7 +1016,10 @@ class WindLines {
         u_period: () => air ? 34.0 : 26.0,
         u_speed: () => self.speed,
         u_base: () => air ? 0.08 : 0.16,
-        u_width: () => (air ? 1.9 : 1.5) * (window.devicePixelRatio || 1)
+        u_width: () => (self.opts.width || (air ? 1.9 : 1.5)) * (window.devicePixelRatio || 1),
+        u_solid: () => solid ? 1.0 : 0.0,
+        u_color: () => new Cesium.Cartesian3(col[0], col[1], col[2]),
+        u_rim: () => new Cesium.Cartesian3(rim[0], rim[1], rim[2])
       }
     });
   }
