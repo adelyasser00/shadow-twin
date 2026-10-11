@@ -116,7 +116,9 @@ def main():
             ax.plot(xs, ys, linestyle=(0, (5, 4)), color=INK, linewidth=1.6, zorder=6)
             ax.annotate("the tower in 2017," + NL + "as the model had it", xy=(xs[-2], max(ys) * 0.8),
                         xytext=(x[face] + 130, max(ys) + 60), arrowprops=lead, **lab)
-            ax.annotate("air from 60 to 100 m up" + NL + "comes down the windward face",
+            # No height in the words: wind numbers stay off images until the
+            # AIJ check passes (POST_BRIEF.md, section 4).
+            ax.annotate("air from high on the windward face" + NL + "comes down to the street",
                         xy=(-35.0, 45.0), xytext=(-460.0, 290.0), arrowprops=lead, **lab)
         else:
             ax.annotate("the same air stays above the street," + NL + "turning in a slow eddy",
