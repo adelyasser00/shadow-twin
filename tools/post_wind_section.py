@@ -65,7 +65,7 @@ def main():
     h17 = heights["Central Park Tower"]["roof_2017_m"]
     hnow = heights["Central Park Tower"]["today_m"]
     cmap = ListedColormap(matplotlib.colormaps["Blues"](np.linspace(0.08, 0.95, 256)))
-    lab = dict(fontsize=15, color=INK, family="IBM Plex Sans Condensed", path_effects=halo, zorder=7)
+    lab = dict(fontsize=17, color=INK, family="IBM Plex Sans Condensed", path_effects=halo, zorder=7)
     lead = dict(arrowstyle="-", color=INK, linewidth=1.0)
 
     fig = plt.figure(figsize=(10.8, 13.5), dpi=100, facecolor="white")
