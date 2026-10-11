@@ -204,6 +204,33 @@ def columns(delta, report, grid, to_ll):
             for lo, la, v in zip(lon, lat, mean[ii, jj])]
 
 
+GREW_M = 15.0
+
+
+def really_grew(tower, layers, masks, meta):
+    """
+    Whether a building listed as grown since 2017 really grew: today's height
+    more than GREW_M above the highest 2017 LiDAR return within 10 m of its
+    changed cells. The grown-building rule can raise a few edge cells of a
+    building that was already there (432 Park Avenue, finished in 2015, is
+    one); the viewer must not draw those in the "grew since 2017" amber.
+    Same test as tools/tower_heights.py.
+    """
+    from pyproj import Transformer
+    from scipy import ndimage
+    t = meta["_transform"]
+    x, y = Transformer.from_crs("EPSG:4326", "EPSG:32118", always_xy=True).transform(*tower["lonlat"])
+    r, c = int((y - t.f) / t.e), int((x - t.c) / t.a)
+    lab, _ = ndimage.label(masks["changed"], structure=np.ones((3, 3)))
+    if not lab[r, c]:
+        return True
+    comp = lab == lab[r, c]
+    around = ndimage.binary_dilation(comp, iterations=5)
+    top17 = float((layers["dsm_2017"] - layers["dem"])[around].max())
+    now = float((layers["dsm_today"] - layers["dem"])[comp].max())
+    return now - top17 > GREW_M
+
+
 def gate_status():
     from .verify_heat import GATES_JSON
     if not os.path.exists(GATES_JSON):
@@ -314,7 +341,7 @@ def main():
     att = os.path.join(HEAT_DIR, "compare", "towers.json")
     if os.path.exists(att):
         with open(att, encoding="utf-8") as f:
-            towers = json.load(f)
+            towers = [t for t in json.load(f) if really_grew(t, layers, masks, meta)]
 
     felt_legend = []
     for i, c in enumerate(felt_cols):
