@@ -186,12 +186,14 @@ def inlet(inflow, bx):
     return prof, iu, float(at(np.array([Z_REF_M]), u)[0] * scale)
 
 
-def run_name(theta, res, mirror, box="full"):
-    return f"d{theta:04.1f}_{res:g}m" + ("_mirror" if mirror else "") + ("" if box == "full" else f"_{box}")
+def run_name(theta, res, mirror, box="full", tag=""):
+    return f"d{theta:04.1f}_{res:g}m" + ("_mirror" if mirror else "") + ("" if box == "full" else f"_{box}") + tag
 
 
-def run_one(theta, res, mirror=False, log=print, force=False, box="full"):
-    out = os.path.join(RUNS, run_name(theta, res, mirror, box))
+def run_one(theta, res, mirror=False, log=print, force=False, box="full", z0=Z0_M, smag=0.17):
+    # Settings other than NYC's (z0, Smagorinsky) are diagnostics only and get their own run names.
+    tag = (f"_z0{z0:g}" if z0 != Z0_M else "") + (f"_cs{smag:g}" if smag != 0.17 else "")
+    out = os.path.join(RUNS, run_name(theta, res, mirror, box, tag))
     if os.path.exists(os.path.join(out, "run.json")) and not force:
         log(f"  {os.path.basename(out)}: already done")
         return out
@@ -201,7 +203,7 @@ def run_one(theta, res, mirror=False, log=print, force=False, box="full"):
     solid, bh, kfirst = voxelise(bx)
     prof, iu, uh = inlet(inflow, bx)
     turb = InflowTurbulence(prof, 1, res, bx.ny, iu=iu)
-    s = Solver(solid, prof, res_m=res, z0_m=Z0_M, turbulence=turb, log=log)
+    s = Solver(solid, prof, smag=smag, res_m=res, z0_m=z0, turbulence=turb, log=log)
     ft = bx.nx / float(prof[1:].mean())
     n_spin = int(SPINUP * ft)
     n_avg = int(AVERAGE_HERO * ft)
@@ -235,7 +237,7 @@ def run_one(theta, res, mirror=False, log=print, force=False, box="full"):
                         speed_low=mean[4, :nkeep].astype(np.float16), u_low=mean[:3, :nkeep].astype(np.float16),
                         profile=prof, iu=iu)
     meta = {"box": bx.meta(), "box_size": BOXES[box], "uh_lattice": uh, "z_ref_m": Z_REF_M,
-            "tau0": 0.5005, "smagorinsky": 0.17, "walls": "slip + wall-law drag", "z0_m": Z0_M,
+            "tau0": 0.5005, "smagorinsky": smag, "walls": "slip + wall-law drag", "z0_m": z0,
             "wall_cd": round(s.cd_wall, 5), "inflow": "measured U/UH and k (AIJ Case D, Inflow sheet)",
             "flow_through_steps": round(ft), "spinup_steps": n_spin, "average_steps": n_avg,
             "samples": int(k_full), "accumulate_every": ACC_EVERY,
@@ -410,6 +412,8 @@ def main():
     ap.add_argument("--dir", type=float, nargs="*", default=list(DIRS))
     ap.add_argument("--mirror", action="store_true", help="also run the opposite turn at 8 m (diagnostic)")
     ap.add_argument("--box", choices=tuple(BOXES), default="full", help="trim: the smaller box (diagnostic)")
+    ap.add_argument("--z0", type=float, default=Z0_M, help="wall roughness length, m (diagnostic only)")
+    ap.add_argument("--cs", type=float, default=0.17, help="Smagorinsky constant (diagnostic only)")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
     t0 = time.time()
@@ -422,7 +426,7 @@ def main():
     elif args.what == "run":
         for res in args.res:
             for d in args.dir:
-                run_one(d, res, log=log, force=args.force, box=args.box)
+                run_one(d, res, log=log, force=args.force, box=args.box, z0=args.z0, smag=args.cs)
         if args.mirror:
             for d in args.dir:
                 if d:
