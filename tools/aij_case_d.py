@@ -70,7 +70,13 @@ BOX = {"length_m": 1600.0, "width_m": 1000.0, "height_m": 300.0, "tower_from_inl
 # buffer per lattice caps it near 28 M). It still holds the whole block array
 # at every turn. For the diagnostic after the verdict only (POST_NOTES.md, A6).
 BOX_TRIM = {"length_m": 1000.0, "width_m": 720.0, "height_m": 240.0, "tower_from_inlet_m": 400.0}
-BOXES = {"full": BOX, "trim": BOX_TRIM}
+# The tightest box that holds 1.25 m cells (20 across the tower; 24.7 M cells):
+# every probe is within 70 m of the tower and the upwind blocks reach at most
+# 390 m upwind at any turn (POST_NOTES.md, A9). Probes are read in the cell
+# holding their 2 m height there, as in Case A, not in the first open cell.
+BOX_TIGHT = {"length_m": 600.0, "width_m": 400.0, "height_m": 200.0, "tower_from_inlet_m": 400.0}
+BOXES = {"full": BOX, "trim": BOX_TRIM, "tight": BOX_TIGHT}
+PROBE_Z_M = 2.0
 KAPPA_UVW = 0.5 * (1 + 0.75 ** 2 + 0.5 ** 2)    # k = this * sigma_u^2 for our gust ratios
 
 # The gate (POST_NOTES.md, A1), decided at 8 m only.
@@ -260,7 +266,12 @@ def near_tower(x, y):
     return np.hypot(np.maximum(np.abs(x) - TOWER_HALF_M, 0), np.maximum(np.abs(y) - TOWER_HALF_M, 0)) <= NEAR_M
 
 
-def sample(run_dir, probes):
+def probe_rule(meta):
+    """Which reading decides: the first open cell (A5), or the cell holding 2 m (A9, the tight box)."""
+    return "probe" if meta["box"].get("box_name") == "tight" else "first"
+
+
+def sample(run_dir, probes, rule=None):
     """Street-level mean speed / UH at each probe, and whether the probe had to move off a building."""
     with open(os.path.join(run_dir, "run.json"), encoding="utf-8") as f:
         meta = json.load(f)
@@ -268,6 +279,8 @@ def sample(run_dir, probes):
     bx = AijBox(b["theta"], b["res_m"], b["mirror"], b.get("box_name", "full"))
     z = np.load(os.path.join(run_dir, "street.npz"))
     street = z["kfirst"] == 1
+    rule = rule or probe_rule(meta)
+    field = z["speed"] if rule == "first" else z["speed_low"][int(PROBE_Z_M // b["res_m"]) + 1].astype(np.float32)
     fi, fj = bx.from_probe(probes[:, 1], probes[:, 2])
     jj, ii = np.nonzero(street)
     sim, moved = [], []
@@ -279,7 +292,7 @@ def sample(run_dir, probes):
             moved.append(True)
         else:
             moved.append(False)
-        sim.append(float(z["speed"][cj, ci]) / meta["uh_lattice"])
+        sim.append(float(field[cj, ci]) / meta["uh_lattice"])
     return np.array(sim), np.array(moved), meta
 
 
@@ -308,11 +321,17 @@ def score(log=print):
         m["moved_off_buildings"] = int(moved[np.isfinite(meas)].sum())
         m["convergence"] = meta["convergence_street_speed"]["median_abs_diff_over_median_speed"]
         m["passes"] = bool(m["r"] >= PASS_R and m["near_mean_abs_rel_err"] <= PASS_NEAR_MAE)
+        m["probe_reading"] = probe_rule(meta)
         name = os.path.basename(run_dir)
         results[name] = m
         log(f"  {name:16s} r {m['r']:.3f}  near |sim/meas-1| {m['near_mean_abs_rel_err']:.3f}  "
             f"hit {m['hit_rate_25pct']:.2f}  bias {m['mean_rel_bias']:+.3f}  moved {m['moved_off_buildings']}  "
-            f"conv {m['convergence'] * 100:.1f}%  {'pass' if m['passes'] else 'fail'}")
+            f"conv {m['convergence'] * 100:.1f}%  {'pass' if m['passes'] else 'fail'}  ({m['probe_reading']} cell)")
+        if m["probe_reading"] == "probe":
+            alt = metrics(meas, sample(run_dir, probes, "first")[0], near)
+            m["first_open_cell"] = alt
+            log(f"  {'':16s} first open cell instead: r {alt['r']:.3f}  near {alt['near_mean_abs_rel_err']:.3f}  "
+                f"bias {alt['mean_rel_bias']:+.3f} (reported, does not decide)")
         for p, s, mv, nr, ms in zip(probes, sim, moved, near, meas):
             rows.append([name, int(p[0]), p[1], p[2], b["theta"], b["res_m"], b["mirror"],
                          None if np.isnan(ms) else round(float(ms), 4), round(float(s), 4), bool(mv), bool(nr)])
@@ -348,6 +367,8 @@ def figure(probes, results):
                                                                   label="2 m, smaller box")),
                                         ((2.0, "_fw"), False, "trim", dict(color="#c0392b", marker="v", s=22,
                                                                            label="2 m, smaller box, facade friction")),
+                                        ((1.25, "_fw"), False, "tight", dict(color="#6c3483", marker="D", s=18,
+                                                                             label="1.25 m, tight box, facade friction")),
                                         (8.0, True, "full", dict(color="#999999", marker="x", s=18,
                                                                  label="8 m, mirrored turn"))):
             res, tag = res if isinstance(res, tuple) else (res, "")
@@ -364,6 +385,7 @@ def figure(probes, results):
                               ("4 m, small box", run_name(d, 4.0, False, "trim")),
                               ("2 m, small box", run_name(d, 2.0, False, "trim")),
                               ("2 m, small box, facades", run_name(d, 2.0, False, "trim", "_fw")),
+                              ("1.25 m, tight box, facades", run_name(d, 1.25, False, "tight", "_fw")),
                               ("mirror", run_name(d, 8.0, True))) if n in results]
         ax.text(0.03, 1.15, "\n".join(txt), va="top", fontsize=9)
         ax.set_xlim(0, 1.2)
