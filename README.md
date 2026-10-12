@@ -426,11 +426,19 @@ Checks (`pipeline/verify_wind.py`, thresholds set before the results), in
 - **Wind tunnel check: fails at 8 m.** `tools/aij_case_d.py`, rules fixed before the run.
   - The benchmark: AIJ Case D, one 100 m tower among 10 m blocks, the Architectural Institute of Japan's benchmark for pedestrian wind CFD. 66 probes at 2 m, wind from 0, 22.5 and 45 degrees.
   - The bar: correlation at least 0.7, and within 25% on average near the tower, in every direction.
-  - At 8 m cells, street-level wind comes out 58 to 73% below the tunnel, with a correlation of 0.30 to 0.41.
-  - At 4 m: 0.59 to 0.73, still 39 to 51% low.
+  - At 8 m cells, street-level wind comes out 58 to 73% below the tunnel, with a correlation of 0.30 to 0.41. Unchanged after the inlet gust fix below.
+  - At 4 m: 0.59 to 0.73, still 39 to 51% low. Those runs' inlet gusts added about 18% near-ground wind, so 4 m is if anything worse.
   - Only the street in front of the tower's windward face is right at 8 m. Narrow streets one cell wide nearly stop the air.
-  - After the verdict, as a diagnostic: 2 m cells, in a smaller box that fits the GPU, remove the bias (−4 to +10%). But the pattern near the tower is still off, with a correlation of 0.55 to 0.77 and the downwash in front of the tower too strong.
   - Smoother ground and a lower Smagorinsky constant change little.
+- **Second round, 2 m cells with friction on building faces: fails too.**
+  - Rules fixed before the run.
+  - On AIJ Case A, a single 1:1:2 building (`tools/aij_case_a.py`): correlation 0.65 and 27% off on average, against a bar of 0.70 and 25%.
+  - The approach flow and the corner streams match. The wake behind the building recovers too slowly.
+  - Case D at 2 m, in a smaller box that fits the GPU: correlation 0.58 to 0.77, near the tower 30 to 33% off, street wind 14 to 22% low.
+- **Inlet gust fix.** The synthetic gusts at the inlet did not average to zero, and their strength was wrong near the ground, once a gust spans many cells. At 2 m that added 28% near-ground wind.
+  - An earlier 2 m diagnostic that seemed to remove the bias was mostly this, and is withdrawn.
+  - Now each inlet point's gusts average to zero, with the measured strength at each height.
+  - The city runs were made before the fix: about +10% near-ground wind at the inlet, the same for 2017 and today.
 
 Read every wind number with these:
 
@@ -457,11 +465,15 @@ The wind tunnel check reads the AIJ Case D data file,
 `CaseD(Highrise+Blocks).xls`, from data/wind/aij/wayback/. aij.or.jp's data
 server answers with a busy page, so the file comes from the Internet Archive,
 web.archive.org, snapshot of 15 June 2022; the 2013 snapshot is identical.
-The block layout is written out from the file's own Fig. 3:
+The block layout is written out from the file's own Fig. 3. Case A,
+`CaseA(1_1_2).xls`, comes from the 21 July 2013 snapshot into
+data/wind/aij/wayback_a/:
 
 ```
 .venv-heat/Scripts/python -I tools/aij_case_d.py check
 .venv-heat/Scripts/python -I tools/aij_case_d.py run --mirror
+.venv-heat/Scripts/python -I tools/aij_case_d.py run --res 2 --box trim --facade
+.venv-heat/Scripts/python -I tools/aij_case_a.py run --facade --plain
 ```
 
 ---
