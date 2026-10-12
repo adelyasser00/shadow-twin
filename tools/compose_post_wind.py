@@ -209,7 +209,7 @@ def compose(raw, with_number, headline, number=None):
     st_roof = T["Steinway Tower"]["roof"]
     w53_roof = T["53 W 53rd"]["roof"]
     effect = (f"street at its foot: +{number:.0f}% windier" if with_number and number is not None
-              else "street at its foot: much windier")
+              else "street at its foot: windier")
     hc, hs, hw = h["Central Park Tower"], h["Steinway Tower"], h["53 W 53rd"]
     label(d, SAFE[0], cpt["roof"][1] - 22, ["Central Park Tower",
                                            f"{hc['roof_2017_m']} m in 2017, {hc['today_m']} m today", effect],
