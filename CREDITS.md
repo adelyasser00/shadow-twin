@@ -22,6 +22,15 @@ streets.
 **Basemap tiles.** OpenStreetMap contributors, via the standard tile server.
 Rendered in the viewer under the OpenStreetMap licence.
 
+**Wind tunnel benchmark.** Architectural Institute of Japan, *Guidebook for
+CFD Predictions of Urban Wind Environment* (2007), test case D, "A
+high-rise building in city blocks"
+(wind tunnel at the Niigata Institute of Technology). The data file was read
+from the Internet Archive's copy of the AIJ site, and is not redistributed
+here. The guidelines are summarised in Tominaga et al., *AIJ guidelines for
+practical applications of CFD to pedestrian wind environment around
+buildings*, Journal of Wind Engineering and Industrial Aerodynamics 96 (2008).
+
 ## Methods
 
 **Analysis days and window.** NYC CEQR Technical Manual, Chapter 8 (Shadows):

@@ -384,12 +384,14 @@ back into felt temperature.
 - **Live:** the viewer's "Live now" reads the current wind from Open-Meteo
   (NOAA's HRRR model), picks the nearest simulated direction and scales it.
 
-First results, the clear December day's northwester, 2017 against today:
+First-round results, the clear December day's northwester, 2017 against
+today. The model failed its wind tunnel check at 8 m (below), so these are
+not for publication:
 
 | | |
 |---|---|
 | Street wind 20 to 80 m from Central Park Tower | 60% stronger |
-| Around 53 West 53rd Street | 29% stronger |
+| Around 53 West 53rd Street | 29% stronger, inside the street noise (35%) |
 | Around Steinway Tower | typical spot unchanged, windiest tenth 39% stronger |
 | Central Park, within 1.5 km of 59th Street | about the same (+1%): the park is upwind of the towers |
 | Park that feels 5 °C+ colder for an hour or more, with the wind at each spot | 24.9 ha (25.7 ha with one wind for the park) |
@@ -418,11 +420,23 @@ Checks (`pipeline/verify_wind.py`, thresholds set before the results), in
   are calmer than lawns, and the strongest street-level speed-ups (2.4 times
   the lawn at the 99th percentile) stay inside the 2 to 3 times published for
   the foot of tall buildings: all pass.
+- Street-level differences between the years count only above 35%: three
+  times the noise of the change on open ground more than 500 m from any
+  building that changed. Only Central Park Tower's change clears it.
+- **Wind tunnel check: fails at 8 m.** `tools/aij_case_d.py`, rules fixed before the run.
+  - The benchmark: AIJ Case D, one 100 m tower among 10 m blocks, the Architectural Institute of Japan's benchmark for pedestrian wind CFD. 66 probes at 2 m, wind from 0, 22.5 and 45 degrees.
+  - The bar: correlation at least 0.7, and within 25% on average near the tower, in every direction.
+  - At 8 m cells, street-level wind comes out 58 to 73% below the tunnel, with a correlation of 0.30 to 0.41.
+  - At 4 m: 0.59 to 0.73, still 39 to 51% low.
+  - Only the street in front of the tower's windward face is right at 8 m. Narrow streets one cell wide nearly stop the air.
+  - After the verdict, as a diagnostic: 2 m cells, in a smaller box that fits the GPU, remove the bias (−4 to +10%). But the pattern near the tower is still off, with a correlation of 0.55 to 0.77 and the downwash in front of the tower too strong.
+  - Smoother ground and a lower Smagorinsky constant change little.
 
 Read every wind number with these:
 
-- 8 m cells: right for where towers pull wind down, wakes and sheltered lawns;
-  not for the gust at one corner. This is not a pedestrian wind comfort study.
+- 8 m cells are too coarse for street-level wind: the wind tunnel check
+  failed. Read the maps as first-round. This is not a pedestrian wind comfort
+  study.
 - Time-mean wind, not gusts. Neutral air, no heating of the ground.
 - The absolute speed is the least certain number. The Central Park station is
   known to read low; read ratios and the change since 2017 first.
@@ -437,6 +451,17 @@ Run it (same environment as the heat layer, plus `pyopencl`):
 .venv-heat/Scripts/python -m pipeline.verify_wind
 .venv-heat/Scripts/python tools/wind_qa.py
 .venv-heat/Scripts/python tools/render_wind.py
+```
+
+The wind tunnel check reads the AIJ Case D data file,
+`CaseD(Highrise+Blocks).xls`, from data/wind/aij/wayback/. aij.or.jp's data
+server answers with a busy page, so the file comes from the Internet Archive,
+web.archive.org, snapshot of 15 June 2022; the 2013 snapshot is identical.
+The block layout is written out from the file's own Fig. 3:
+
+```
+.venv-heat/Scripts/python -I tools/aij_case_d.py check
+.venv-heat/Scripts/python -I tools/aij_case_d.py run --mirror
 ```
 
 ---
