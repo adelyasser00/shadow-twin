@@ -10,6 +10,7 @@ Makes deploy/ containing:
     frames-today/       images for the today build, if it was split
     frames-2017/        images for the 2017 build, if it was split
     heat/               heat layers (heat.json and images), if they were exported
+    wind/               wind layer (wind.json, line and map files), if it was exported
     preview.png         link-preview image, if you put one in viewer/
     robots.txt          lets link-preview bots in
 
@@ -50,7 +51,7 @@ WANT = [("shadow-twin-today.html", "index.html", True),
         # Without it Pages answers /robots.txt with index.html, and link
         # preview bots (LinkedIn) may read that as "not allowed".
         ("robots.txt", "robots.txt", True)]
-FOLDERS = ["frames-today", "frames-2017", "heat"]
+FOLDERS = ["frames-today", "frames-2017", "heat", "wind"]
 SITE = os.environ.get("SITE_URL", "https://shadow-twin-adelyasser00.pages.dev").rstrip("/")
 # Cloudflare Pages serves 2017.html at /2017 (clean URLs).
 PAGE_URL = {"index.html": "/", "2017.html": "/2017"}
