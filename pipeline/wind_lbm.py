@@ -41,6 +41,8 @@ inlet face and one outlet face.
             brakes the first layer far too hard (it made the open lawn 2 to 3
             times too calm). A slip wall plus a wall-law drag is the usual
             remedy at this resolution. Bounce-back (no-slip) stays available.
+            With facade_drag, an open cell beside a facade feels the same
+            drag once per touching face (off by default)
   trees     a drag force per cell, F = -c |u| u, applied implicitly with the
             exact difference method (Kupershtokh), so dense canopy cannot
             reverse the flow
@@ -247,7 +249,8 @@ class Solver:
     """
 
     def __init__(self, solid, profile, veg=None, tau0=0.5005, smag=CS_SMAGORINSKY,
-                 slip=True, z0_m=0.1, res_m=8.0, turbulence=None, device=None, log=print):
+                 slip=True, z0_m=0.1, res_m=8.0, turbulence=None, device=None, log=print,
+                 facade_drag=False):
         import pyopencl as cl
         solid = np.ascontiguousarray(solid, dtype=bool)
         nz, ny, nx = solid.shape
@@ -273,6 +276,16 @@ class Solver:
             above = np.zeros_like(solid)
             above[1:] = solid[:-1] & ~solid[1:]
             veg[above] += self.cd_wall
+            if facade_drag:
+                # The same wall law beside facades: once per solid side face
+                # (x is open at the inlet and outlet, y is periodic).
+                faces = np.zeros(solid.shape, np.float32)
+                faces[:, :, 1:] += solid[:, :, :-1]
+                faces[:, :, :-1] += solid[:, :, 1:]
+                faces += np.roll(solid, 1, axis=1)
+                faces += np.roll(solid, -1, axis=1)
+                veg += self.cd_wall * faces
+        self.facade_drag = bool(slip and facade_drag)
         veg = np.where(solid, 0.0, veg).astype(np.float32)
 
         self.ctx = cl.Context([device or pick_device()])
@@ -312,7 +325,8 @@ class Solver:
         self.mem_mb = (2 * lattice_bytes + (3 + NACC) * 4 * n + 5 * n) / 2**20
         log(f"  lbm: {nx} x {ny} x {nz} = {n / 1e6:.1f} M cells on {self.device_name}, "
             f"{self.mem_mb:.0f} MB, tau0 {tau0}, Cs {smag}, "
-            + (f"slip walls, wall drag {self.cd_wall:.4f} (z0 {z0_m} m)" if slip else "no-slip walls"))
+            + (f"slip walls, wall drag {self.cd_wall:.4f} (z0 {z0_m} m)" if slip else "no-slip walls")
+            + (", on facades too" if self.facade_drag else ""))
 
     def run(self, steps, accumulate_every=0, log_every=0):
         """Advance `steps` steps; sum velocity every `accumulate_every` steps (0: never)."""
@@ -409,9 +423,20 @@ class InflowTurbulence:
     surface layer. Size: Gaussian smoothing of white noise with sigma
     `sigma_m` (integral scale about 1.8 times sigma) along the wind, across
     it and up.
+
+    With `calibrate` (the default), the gusts at every inlet point average to
+    zero over the cycle, so the inflow's time mean is the profile, and their
+    strength is set height by height, so it is the I(h) above. Without it, a
+    cycle holds too few gusts for their mean to vanish, and one scale for the
+    whole inlet misses near the ground: at 2 m cells an 80 m gust spans 40
+    cells, and the near-ground inflow came out 28% too fast with gusts 1.7
+    times too strong in one box, and with a strong mean updraft in another.
+    The city runs up to 12 Oct 2026 were made without it (about +10% near the
+    ground at the inlet, the same in every scenario).
     """
 
-    def __init__(self, profile, ground_k, res_m, ny, sigma_m=80.0, slices=256, seed=11, iu=None):
+    def __init__(self, profile, ground_k, res_m, ny, sigma_m=80.0, slices=256, seed=11, iu=None,
+                 calibrate=True):
         from scipy.ndimage import gaussian_filter
         nz = len(profile)
         rng = np.random.default_rng(seed)
@@ -419,7 +444,11 @@ class InflowTurbulence:
         f = rng.standard_normal((3, slices, nz, ny)).astype(np.float32)
         for c in range(3):
             f[c] = gaussian_filter(f[c], sigma=(sg, sg, sg), mode=("wrap", "nearest", "wrap"))
-            f[c] /= max(float(f[c].std()), 1e-9)
+            if calibrate:
+                f[c] -= f[c].mean(axis=0, keepdims=True)
+                f[c] /= np.maximum(f[c].std(axis=(0, 2), keepdims=True), 1e-9)
+            else:
+                f[c] /= max(float(f[c].std()), 1e-9)
         if iu is None:
             h = np.maximum((np.arange(nz) - ground_k + 0.5) * res_m, 0.5)
             iu = np.clip(0.30 * (h / 10.0) ** -0.25, 0.08, 0.35)
@@ -431,6 +460,7 @@ class InflowTurbulence:
             f[c] *= (r * sig)[None, :, None]
         self.field = f
         self.slices = slices
+        self.calibrated = bool(calibrate)
         u_conv = float(np.asarray(profile)[ground_k:].mean())
         self.steps_per_slice = 1.0 / max(u_conv, 1e-4)      # one cell of travel per slice
 

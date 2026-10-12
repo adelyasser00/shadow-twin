@@ -8,6 +8,7 @@ read) were fixed in POST_NOTES.md, Part A, before the first run.
 
     .venv-heat/Scripts/python -I tools/aij_case_d.py check
     .venv-heat/Scripts/python -I tools/aij_case_d.py run [--res 8 4] [--dir 0 22.5 45] [--mirror] [--box trim]
+                                                         [--facade]
     .venv-heat/Scripts/python -I tools/aij_case_d.py score
 
 Input: the AIJ data file, data/wind/aij/wayback/CaseD(Highrise+Blocks)_*.xls
@@ -190,9 +191,9 @@ def run_name(theta, res, mirror, box="full", tag=""):
     return f"d{theta:04.1f}_{res:g}m" + ("_mirror" if mirror else "") + ("" if box == "full" else f"_{box}") + tag
 
 
-def run_one(theta, res, mirror=False, log=print, force=False, box="full", z0=Z0_M, smag=0.17):
-    # Settings other than NYC's (z0, Smagorinsky) are diagnostics only and get their own run names.
-    tag = (f"_z0{z0:g}" if z0 != Z0_M else "") + (f"_cs{smag:g}" if smag != 0.17 else "")
+def run_one(theta, res, mirror=False, log=print, force=False, box="full", z0=Z0_M, smag=0.17, facade=False):
+    # Settings other than NYC's (z0, Smagorinsky, facade friction) get their own run names.
+    tag = (f"_z0{z0:g}" if z0 != Z0_M else "") + (f"_cs{smag:g}" if smag != 0.17 else "") + ("_fw" if facade else "")
     out = os.path.join(RUNS, run_name(theta, res, mirror, box, tag))
     if os.path.exists(os.path.join(out, "run.json")) and not force:
         log(f"  {os.path.basename(out)}: already done")
@@ -203,7 +204,7 @@ def run_one(theta, res, mirror=False, log=print, force=False, box="full", z0=Z0_
     solid, bh, kfirst = voxelise(bx)
     prof, iu, uh = inlet(inflow, bx)
     turb = InflowTurbulence(prof, 1, res, bx.ny, iu=iu)
-    s = Solver(solid, prof, smag=smag, res_m=res, z0_m=z0, turbulence=turb, log=log)
+    s = Solver(solid, prof, smag=smag, res_m=res, z0_m=z0, turbulence=turb, log=log, facade_drag=facade)
     ft = bx.nx / float(prof[1:].mean())
     n_spin = int(SPINUP * ft)
     n_avg = int(AVERAGE_HERO * ft)
@@ -237,8 +238,10 @@ def run_one(theta, res, mirror=False, log=print, force=False, box="full", z0=Z0_
                         speed_low=mean[4, :nkeep].astype(np.float16), u_low=mean[:3, :nkeep].astype(np.float16),
                         profile=prof, iu=iu)
     meta = {"box": bx.meta(), "box_size": BOXES[box], "uh_lattice": uh, "z_ref_m": Z_REF_M,
-            "tau0": 0.5005, "smagorinsky": smag, "walls": "slip + wall-law drag", "z0_m": z0,
+            "tau0": 0.5005, "smagorinsky": smag, "z0_m": z0,
+            "walls": "slip + wall-law drag" + (" on ground, roofs and facades" if facade else " on ground and roofs"),
             "wall_cd": round(s.cd_wall, 5), "inflow": "measured U/UH and k (AIJ Case D, Inflow sheet)",
+            "gusts_calibrated": turb.calibrated,
             "flow_through_steps": round(ft), "spinup_steps": n_spin, "average_steps": n_avg,
             "samples": int(k_full), "accumulate_every": ACC_EVERY,
             "mlups": [round(m) for m in mlups], "device": s.device_name,
@@ -343,9 +346,12 @@ def figure(probes, results):
                                         (4.0, False, "full", dict(color="#d08a00", marker="s", s=18, label="4 m")),
                                         (2.0, False, "trim", dict(color="#2e8b57", marker="^", s=22,
                                                                   label="2 m, smaller box")),
+                                        ((2.0, "_fw"), False, "trim", dict(color="#c0392b", marker="v", s=22,
+                                                                           label="2 m, smaller box, facade friction")),
                                         (8.0, True, "full", dict(color="#999999", marker="x", s=18,
                                                                  label="8 m, mirrored turn"))):
-            name = run_name(d, res, mirror, box)
+            res, tag = res if isinstance(res, tuple) else (res, "")
+            name = run_name(d, res, mirror, box, tag)
             if name not in results:
                 continue
             sim, _, _ = sample(os.path.join(RUNS, name), probes)
@@ -357,6 +363,7 @@ def figure(probes, results):
                for lab, n in (("8 m", run_name(d, 8.0, False)), ("4 m", run_name(d, 4.0, False)),
                               ("4 m, small box", run_name(d, 4.0, False, "trim")),
                               ("2 m, small box", run_name(d, 2.0, False, "trim")),
+                              ("2 m, small box, facades", run_name(d, 2.0, False, "trim", "_fw")),
                               ("mirror", run_name(d, 8.0, True))) if n in results]
         ax.text(0.03, 1.15, "\n".join(txt), va="top", fontsize=9)
         ax.set_xlim(0, 1.2)
@@ -414,6 +421,7 @@ def main():
     ap.add_argument("--box", choices=tuple(BOXES), default="full", help="trim: the smaller box (diagnostic)")
     ap.add_argument("--z0", type=float, default=Z0_M, help="wall roughness length, m (diagnostic only)")
     ap.add_argument("--cs", type=float, default=0.17, help="Smagorinsky constant (diagnostic only)")
+    ap.add_argument("--facade", action="store_true", help="wall-law drag beside facades too (POST_NOTES.md, A7)")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
     t0 = time.time()
@@ -426,7 +434,8 @@ def main():
     elif args.what == "run":
         for res in args.res:
             for d in args.dir:
-                run_one(d, res, log=log, force=args.force, box=args.box, z0=args.z0, smag=args.cs)
+                run_one(d, res, log=log, force=args.force, box=args.box, z0=args.z0, smag=args.cs,
+                        facade=args.facade)
         if args.mirror:
             for d in args.dir:
                 if d:
