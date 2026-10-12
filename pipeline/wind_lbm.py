@@ -423,7 +423,8 @@ class InflowTurbulence:
         if iu is None:
             h = np.maximum((np.arange(nz) - ground_k + 0.5) * res_m, 0.5)
             iu = np.clip(0.30 * (h / 10.0) ** -0.25, 0.08, 0.35)
-        iu = np.asarray(iu, np.float32)
+        else:
+            iu = np.asarray(iu, np.float64)
         sig = (iu * np.asarray(profile, np.float32)).astype(np.float32)
         sig[:ground_k] = 0.0
         for c, r in enumerate((1.0, 0.75, 0.5)):
