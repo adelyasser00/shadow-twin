@@ -253,7 +253,8 @@ def figure(probes, meas, results):
     import matplotlib.pyplot as plt
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(13, 5.6), dpi=110)
     styles = {"2m": dict(color="#2e8b57", marker="^", s=24, label="2 m, slip facades"),
-              "2m_fw": dict(color="#c0392b", marker="v", s=24, label="2 m, facade friction")}
+              "2m_fw": dict(color="#c0392b", marker="v", s=24, label="2 m, facade friction"),
+              "1.25m_fw": dict(color="#6c3483", marker="D", s=18, label="1.25 m, facade friction")}
     for name, st in styles.items():
         if name not in results:
             continue
