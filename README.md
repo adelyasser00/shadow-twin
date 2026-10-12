@@ -435,6 +435,13 @@ Checks (`pipeline/verify_wind.py`, thresholds set before the results), in
   - On AIJ Case A, a single 1:1:2 building (`tools/aij_case_a.py`): correlation 0.65 and 27% off on average, against a bar of 0.70 and 25%.
   - The approach flow and the corner streams match. The wake behind the building recovers too slowly.
   - Case D at 2 m, in a smaller box that fits the GPU: correlation 0.58 to 0.77, near the tower 30 to 33% off, street wind 14 to 22% low.
+- **Third round: 20 cells across the building passes both cases.**
+  - This is the D/20 rule of the AIJ and COST guidelines, where D is the building's shortest edge.
+  - Case A passes at 1.25 m: correlation 0.85, 21% off on average.
+  - Case D then passes at 1.25 m in all three directions: correlation 0.80 to 0.85, 18 to 23% off near the tower, street wind 3 to 11% low.
+  - Probes are read at their 2 m height. Read in the lowest 0.6 m cell, they fail.
+  - The Case D box is tight (600 x 400 x 200 m), the most 1.25 m cells this GPU holds.
+  - The 8 m city maps are still 8 m: about 9 cells across Central Park Tower and one or two across a side street. They stay first-round.
 - **Inlet gust fix.** The synthetic gusts at the inlet did not average to zero, and their strength was wrong near the ground, once a gust spans many cells. At 2 m that added 28% near-ground wind.
   - An earlier 2 m diagnostic that seemed to remove the bias was mostly this, and is withdrawn.
   - Now each inlet point's gusts average to zero, with the measured strength at each height.
@@ -474,6 +481,8 @@ data/wind/aij/wayback_a/:
 .venv-heat/Scripts/python -I tools/aij_case_d.py run --mirror
 .venv-heat/Scripts/python -I tools/aij_case_d.py run --res 2 --box trim --facade
 .venv-heat/Scripts/python -I tools/aij_case_a.py run --facade --plain
+.venv-heat/Scripts/python -I tools/aij_case_a.py run --res 1.25 --facade
+.venv-heat/Scripts/python -I tools/aij_case_d.py run --res 1.25 --box tight --facade
 ```
 
 ---
