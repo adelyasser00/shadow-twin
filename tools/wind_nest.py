@@ -178,8 +178,10 @@ def run_one(scenario, theta, facade=True, log=print, force=False, width=NEST["wi
     nest_bias = float(np.median(child[ok] / par[ok] - 1))
 
     street = street_layer(mean, kf)
+    above = street_layer(mean[4:5], np.minimum(kf + 1, nz - 1))[0]     # the next cell up, 2 to 4 m
     os.makedirs(out, exist_ok=True)
     np.savez_compressed(os.path.join(out, "street.npz"), street_speed=street[4].astype(np.float32),
+                        street_speed_above=above.astype(np.float32),
                         street_u=street[:3].astype(np.float32), kfirst=kf, roof=cols["roof"],
                         building=cols["building"].astype(np.float32), ground=cols["ground"].astype(np.float32),
                         u_low=mean[:3, :41].astype(np.float16), profile=prof, iu=iu.astype(np.float32),
@@ -233,8 +235,10 @@ def score(theta, facade=True, log=print, width=NEST["width_m"]):
         z = np.load(os.path.join(d, "street.npz"))
         ok = (~z["roof"]) & np.isfinite(z["street_speed"])
         v = resample(z["street_speed"], ok, RunBox(m), x[ring], y[ring])
+        va = resample(z["street_speed_above"], ok, RunBox(m), x[ring], y[ring])
         k8 = np.load(os.path.join(RUNS_DIR, parent_name(sc, "dec", theta, PARENT_RES), "k_heatgrid.npy"))[ring]
         res[sc] = {"median_2m": float(np.nanmedian(v)), "p90_2m": float(np.nanpercentile(v, 90)),
+                   "median_2m_next_cell_up": float(np.nanmedian(va)),
                    "n_2m": int(np.isfinite(v).sum()), "median_8m_x_lawn": float(np.nanmedian(k8)),
                    "nesting_check": m["nesting_check"], "convergence": m["convergence_street_speed"]}
     a, b = res["2017"], res["today"]
@@ -243,13 +247,16 @@ def score(theta, facade=True, log=print, width=NEST["width_m"]):
            "change_pct_2m": round((b["median_2m"] / a["median_2m"] - 1) * 100, 1),
            "change_p90_pct_2m": round((b["p90_2m"] / a["p90_2m"] - 1) * 100, 1),
            "change_pct_8m": round((b["median_8m_x_lawn"] / a["median_8m_x_lawn"] - 1) * 100, 1),
+           "change_pct_2m_next_cell_up": round((b["median_2m_next_cell_up"] / a["median_2m_next_cell_up"] - 1) * 100,
+                                               1),
            "generated": datetime.now().isoformat(timespec="seconds")}
     tag = "" if width == NEST["width_m"] else f"_w{width:g}"
     with open(os.path.join(OUT, f"score_{theta:05.1f}{tag}.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(out, f, indent=1)
     log(f"  {TOWER}, {theta:g} deg, {width:g} m wide box, street ring {RING_M[0]:g}-{RING_M[1]:g} m: change since 2017 "
         f"{out['change_pct_2m']:+.1f}% at 2 m (windiest tenth {out['change_p90_pct_2m']:+.1f}%), "
-        f"{out['change_pct_8m']:+.1f}% at 8 m")
+        f"{out['change_pct_8m']:+.1f}% at 8 m; next cell up (2-4 m, does not decide) "
+        f"{out['change_pct_2m_next_cell_up']:+.1f}%")
     for sc, r in res.items():
         log(f"    {sc}: nesting check {r['nesting_check']['median_abs_rel_diff'] * 100:.1f}%, "
             f"street halves {r['convergence']['median_abs_diff_over_median_speed'] * 100:.1f}%, "
