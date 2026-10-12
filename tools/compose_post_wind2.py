@@ -112,6 +112,10 @@ def key(img, x, y):
     d.line([(ax, y + 34), (ax, y + 6)], fill=(255, 255, 255), width=3)
     d.polygon([(ax - 8, y + 12), (ax + 8, y + 12), (ax, y)], fill=(255, 255, 255))
     d.text((x + 32, y + 4), "Northwest wind, blowing away from you", font=f, fill=(255, 255, 255))
+    # The series amber.
+    sx = x + 32 + d.textlength("Northwest wind, blowing away from you", font=f) + 34
+    d.rectangle((sx, y + 10, sx + 18, y + 28), fill=AMBER)
+    d.text((sx + 28, y + 4), "taller since 2017", font=f, fill=(255, 255, 255))
     # Speed: a streak drawn with the ramp, short and calm to long and strong.
     y2 = y + 50
     bw = 150
@@ -120,7 +124,8 @@ def key(img, x, y):
     d.text((x + bw + 14, y2), "Streaks: longer and yellower means faster", font=f, fill=(225, 229, 234))
 
 
-HEADLINE = "The new supertalls pull winter wind down to the street"
+HEADLINE = "How Billionaires' Row reshapes the winter wind"
+SUBTEXT = "Midtown Manhattan  ·  December northwest wind  ·  2017 vs 2026"
 
 
 def compose(frames_dir, headline=HEADLINE):
@@ -131,8 +136,8 @@ def compose(frames_dir, headline=HEADLINE):
     shade(img, 930, H, 0, 248)
     d = ImageDraw.Draw(img)
 
-    # What it is and who made it, small; the observation, large; how, one line.
-    d.text((M, 58), "MY CENTRAL PARK DIGITAL TWIN   /   WIND LAYER", font=font("BarlowCondensed-SemiBold", 27),
+    # What it is, small; the observation, large; the set-up as plain facts, one line.
+    d.text((M, 58), "CENTRAL PARK DIGITAL TWIN   /   WIND LAYER", font=font("BarlowCondensed-SemiBold", 27),
            fill=AMBER)
     fh_ = font("Barlow-Bold", 62)
     y = 98
@@ -140,8 +145,7 @@ def compose(frames_dir, headline=HEADLINE):
         d.text((M, y), ln, font=fh_, fill=(255, 255, 255))
         y += 68
     fs = font("Barlow-Medium", 30)
-    for ln in wrap(d, "I simulated the same December wind over Manhattan, with the buildings of 2017 and of today.",
-                   fs, W - 2 * M - 40):
+    for ln in wrap(d, SUBTEXT, fs, W - 2 * M):
         d.text((M, y + 10), ln, font=fs, fill=(214, 219, 225))
         y += 38
 
@@ -175,7 +179,7 @@ def compose_comment(frames_today, frames_2017):
     """2017 and today side by side, same camera, same wind: only the buildings changed."""
     img = Image.new("RGBA", (W, H), (*INK, 255))
     d = ImageDraw.Draw(img)
-    d.text((M, 50), "MY CENTRAL PARK DIGITAL TWIN   /   2017 VS TODAY", font=font("BarlowCondensed-SemiBold", 27),
+    d.text((M, 50), "CENTRAL PARK DIGITAL TWIN   /   2017 VS 2026", font=font("BarlowCondensed-SemiBold", 27),
            fill=AMBER)
     fh_ = font("Barlow-Bold", 52)
     y = 86
@@ -185,13 +189,14 @@ def compose_comment(frames_today, frames_2017):
     fs = font("Barlow-Medium", 28)
     y += 6
     for ln in wrap(d, "Same December day. In 2017 the wind crossed this block high above the street. "
-                      "Today it runs into Central Park Tower and wraps around and down the new towers.", fs, W - 2 * M):
+                      "In 2026 it runs into Central Park Tower and wraps around and down the new towers.", fs,
+                   W - 2 * M):
         d.text((M, y), ln, font=fs, fill=(214, 219, 225))
         y += 36
     box = (560, 270, 1080, 1150)                  # around Billionaires' Row, from the tops to the street
     pw, gap, top = (W - 12) // 2, 12, y + 16
     scale = pw / (box[2] - box[0])
-    for i, (fr, name) in enumerate(((frames_2017, "2017"), (frames_today, "Today"))):
+    for i, (fr, name) in enumerate(((frames_2017, "2017"), (frames_today, "2026"))):
         with open(os.path.join(fr, "meta.json"), encoding="utf-8") as fh:
             meta = json.load(fh)
         panel = stack(fr).crop(box)
