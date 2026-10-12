@@ -12,6 +12,8 @@ friction on). Sides periodic and lid free slip, as in the city runs.
     .venv-heat/Scripts/python -I tools/wind_nest.py score [--dir 315] [--width 480]
 
 --width 400 is the blockage check (A8): the same pair in a narrower box.
+--average 6: flow-throughs averaged (default 3, as the city runs). The box is
+only 600 m long, so 3 average about 5 times less real time than a city run.
 
 Output (data/, not committed):
   data/wind/nest/<scenario>_dec_<dir>_2m_fw[_w<width>]/street.npz, run.json
@@ -94,13 +96,14 @@ def nest_box(width):
     return dict(NEST, width_m=float(width))
 
 
-def nest_name(scenario, theta, facade=True, width=NEST["width_m"]):
+def nest_name(scenario, theta, facade=True, width=NEST["width_m"], average=AVERAGE_HERO):
     return (f"{scenario}_dec_{theta:05.1f}_{RES:g}m" + ("_fw" if facade else "")
-            + ("" if width == NEST["width_m"] else f"_w{width:g}"))
+            + ("" if width == NEST["width_m"] else f"_w{width:g}")
+            + ("" if average == AVERAGE_HERO else f"_avg{average:g}"))
 
 
-def run_one(scenario, theta, facade=True, log=print, force=False, width=NEST["width_m"]):
-    out = os.path.join(OUT, nest_name(scenario, theta, facade, width))
+def run_one(scenario, theta, facade=True, log=print, force=False, width=NEST["width_m"], average=AVERAGE_HERO):
+    out = os.path.join(OUT, nest_name(scenario, theta, facade, width, average))
     if os.path.exists(os.path.join(out, "run.json")) and not force:
         log(f"  {os.path.basename(out)}: already done")
         return out
@@ -141,7 +144,7 @@ def run_one(scenario, theta, facade=True, log=print, force=False, width=NEST["wi
     s = Solver(solid, prof, veg=veg, res_m=RES, z0_m=Z0_M, turbulence=turb, log=log, facade_drag=facade)
     ft = nx / float(prof[gk:].mean())
     n_spin = int(SPINUP * ft)
-    n_avg = int(AVERAGE_HERO * ft)
+    n_avg = int(average * ft)
     n_avg -= n_avg % (2 * ACC_EVERY)
     log(f"  {os.path.basename(out)}: flow-through {ft:,.0f} steps; {n_spin:,} to settle, {n_avg:,} averaged")
     mlups = [s.run(n_spin, log_every=max(1, n_spin // 2))]
@@ -193,7 +196,8 @@ def run_one(scenario, theta, facade=True, log=print, force=False, width=NEST["wi
             "walls": "slip + wall-law drag" + (" on ground, roofs and facades" if facade else " on ground and roofs"),
             "sides": "periodic", "lid": "free slip", "gusts_calibrated": turb.calibrated,
             "flow_through_steps": round(ft), "spinup_steps": n_spin, "average_steps": n_avg,
-            "samples": int(k_full), "accumulate_every": ACC_EVERY, "mlups": [round(x) for x in mlups],
+            "samples": int(k_full), "average_flow_throughs": average, "accumulate_every": ACC_EVERY,
+            "mlups": [round(x) for x in mlups],
             "device": s.device_name, "convergence_street_speed": conv,
             "nesting_check": {"x_from_inlet_m": CHECK_X_M, "z_m": CHECK_Z_M, "n": int(ok.sum()),
                               "median_abs_rel_diff": round(nest_err, 4), "median_rel_diff": round(nest_bias, 4)},
@@ -224,12 +228,12 @@ def tower_ring():
     return x, y, ring
 
 
-def score(theta, facade=True, log=print, width=NEST["width_m"]):
+def score(theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_HERO):
     from pipeline.wind_export import RunBox, resample
     x, y, ring = tower_ring()
     res = {}
     for sc in ("2017", "today"):
-        d = os.path.join(OUT, nest_name(sc, theta, facade, width))
+        d = os.path.join(OUT, nest_name(sc, theta, facade, width, average))
         with open(os.path.join(d, "run.json"), encoding="utf-8") as f:
             m = json.load(f)
         z = np.load(os.path.join(d, "street.npz"))
@@ -242,7 +246,8 @@ def score(theta, facade=True, log=print, width=NEST["width_m"]):
                    "n_2m": int(np.isfinite(v).sum()), "median_8m_x_lawn": float(np.nanmedian(k8)),
                    "nesting_check": m["nesting_check"], "convergence": m["convergence_street_speed"]}
     a, b = res["2017"], res["today"]
-    out = {"tower": TOWER, "theta": theta, "width_m": width, "ring_m": RING_M, "ring_cells": int(ring.sum()),
+    out = {"tower": TOWER, "theta": theta, "width_m": width, "average_flow_throughs": average,
+           "ring_m": RING_M, "ring_cells": int(ring.sum()),
            "runs": res,
            "change_pct_2m": round((b["median_2m"] / a["median_2m"] - 1) * 100, 1),
            "change_p90_pct_2m": round((b["p90_2m"] / a["p90_2m"] - 1) * 100, 1),
@@ -250,10 +255,11 @@ def score(theta, facade=True, log=print, width=NEST["width_m"]):
            "change_pct_2m_next_cell_up": round((b["median_2m_next_cell_up"] / a["median_2m_next_cell_up"] - 1) * 100,
                                                1),
            "generated": datetime.now().isoformat(timespec="seconds")}
-    tag = "" if width == NEST["width_m"] else f"_w{width:g}"
+    tag = (("" if width == NEST["width_m"] else f"_w{width:g}")
+           + ("" if average == AVERAGE_HERO else f"_avg{average:g}"))
     with open(os.path.join(OUT, f"score_{theta:05.1f}{tag}.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(out, f, indent=1)
-    log(f"  {TOWER}, {theta:g} deg, {width:g} m wide box, street ring {RING_M[0]:g}-{RING_M[1]:g} m: change since 2017 "
+    log(f"  {TOWER}, {theta:g} deg, {width:g} m wide box, {average:g} flow-throughs, street ring {RING_M[0]:g}-{RING_M[1]:g} m: change since 2017 "
         f"{out['change_pct_2m']:+.1f}% at 2 m (windiest tenth {out['change_p90_pct_2m']:+.1f}%), "
         f"{out['change_pct_8m']:+.1f}% at 8 m; next cell up (2-4 m, does not decide) "
         f"{out['change_pct_2m_next_cell_up']:+.1f}%")
@@ -270,6 +276,7 @@ def main():
     ap.add_argument("--scenario", nargs="*", default=["2017", "today"])
     ap.add_argument("--dir", type=float, default=315.0)
     ap.add_argument("--width", type=float, default=NEST["width_m"], help="box width, m (400: the blockage check)")
+    ap.add_argument("--average", type=float, default=AVERAGE_HERO, help="flow-throughs averaged")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
     t0 = time.time()
@@ -279,8 +286,8 @@ def main():
 
     if args.what == "run":
         for sc in args.scenario:
-            run_one(sc, args.dir, log=log, force=args.force, width=args.width)
-    score(args.dir, log=log, width=args.width)
+            run_one(sc, args.dir, log=log, force=args.force, width=args.width, average=args.average)
+    score(args.dir, log=log, width=args.width, average=args.average)
     return 0
 
 
