@@ -5,6 +5,8 @@ compose_post_wind.py read as AI-made and hid the wind).
 
     .venv-heat/Scripts/python tools/render_wind_frames.py upwindP 12 0.6
     .venv-heat/Scripts/python tools/compose_post_wind2.py [frames_dir]
+    .venv-heat/Scripts/python tools/render_wind_frames.py upwindP 12 0.6 2017
+    .venv-heat/Scripts/python tools/compose_post_wind2.py --comment     (2017 vs today, the first comment)
 
 The exposures are stacked with the light brightening toward its head, so each
 streak shows which way the air goes; every streak covers the same time, so
@@ -158,8 +160,68 @@ def compose(frames_dir):
     return img.convert("RGB")
 
 
+CPT_LONLAT = (-73.98102, 40.766438)
+
+
+def cpt_xy(meta):
+    t = min(meta["towers"], key=lambda t: abs(t["lonlat"][0] - CPT_LONLAT[0]) + abs(t["lonlat"][1] - CPT_LONLAT[1]))
+    return t["x"], t["y"]
+
+
+def compose_comment(frames_today, frames_2017):
+    """2017 and today side by side, same camera, same wind: only the buildings changed."""
+    img = Image.new("RGBA", (W, H), (*INK, 255))
+    d = ImageDraw.Draw(img)
+    d.text((M, 50), "MY CENTRAL PARK DIGITAL TWIN   /   2017 VS TODAY", font=font("BarlowCondensed-SemiBold", 27),
+           fill=AMBER)
+    fh_ = font("Barlow-Bold", 52)
+    y = 86
+    for ln in wrap(d, "Same wind. Only the buildings changed.", fh_, W - 2 * M):
+        d.text((M, y), ln, font=fh_, fill=(255, 255, 255))
+        y += 58
+    fs = font("Barlow-Medium", 28)
+    y += 6
+    for ln in wrap(d, "Same December day. In 2017 the wind crossed this block high above the street. "
+                      "Today it runs into Central Park Tower and wraps around and down the new towers.", fs, W - 2 * M):
+        d.text((M, y), ln, font=fs, fill=(214, 219, 225))
+        y += 36
+    box = (560, 270, 1080, 1150)                  # around Billionaires' Row, from the tops to the street
+    pw, gap, top = (W - 12) // 2, 12, y + 16
+    scale = pw / (box[2] - box[0])
+    for i, (fr, name) in enumerate(((frames_2017, "2017"), (frames_today, "Today"))):
+        with open(os.path.join(fr, "meta.json"), encoding="utf-8") as fh:
+            meta = json.load(fh)
+        panel = stack(fr).crop(box)
+        panel = panel.resize((pw, int(panel.height * scale)), Image.LANCZOS)
+        x0 = i * (pw + gap)
+        img.alpha_composite(panel, (x0, top))
+        tag(img, (x0 + 20, top + 18), name, font("Barlow-Bold", 40))
+        cx, cy = cpt_xy(meta)
+        to = (x0 + (cx - box[0]) * scale, top + (cy - box[1]) * scale)
+        tag(img, (x0 + 20, top + 360 if i == 0 else top + 470), "Central Park Tower", font("Barlow-SemiBold", 27),
+            fg=AMBER, to=to)
+    d = ImageDraw.Draw(img)
+    ky = top + int((box[3] - box[1]) * scale) + 22
+    for i in range(150):
+        d.line([(M + i, ky + 10), (M + i, ky + 18)], fill=ramp_colour(i / 149))
+    d.text((M + 164, ky), "Streaks: air moving with the wind, away from you. Longer and yellower means faster.",
+           font=font("Barlow-Medium", 22), fill=(225, 229, 234))
+    d.text((M, H - 68), "Simulation and graphic: Adel Yasser Aglan. Same weather both years; first-round wind "
+                        "model, 8 m cells.", font=font("Barlow-Regular", 21), fill=(170, 176, 184))
+    return img.convert("RGB")
+
+
 def main():
-    frames = sys.argv[1] if len(sys.argv) > 1 else sorted(glob.glob(os.path.join(FIG, "frames_upwindP_*")))[-1]
+    if "--comment" in sys.argv:
+        today = sorted(glob.glob(os.path.join(FIG, "frames_upwindP_2026*")))[-1]
+        y2017 = sorted(glob.glob(os.path.join(FIG, "frames_upwindP_2017_*")))[-1]
+        img = compose_comment(today, y2017)
+        path = os.path.join(FIG, f"post_v2_comment_{datetime.now():%Y%m%d_%H%M%S}.png")
+        img.save(path, format="PNG", optimize=True)
+        img.resize((400, 500), Image.LANCZOS).save(path.replace(".png", "_phone400.png"))
+        print(f"wrote {path}  {os.path.getsize(path) / 1e6:.2f} MB")
+        return 0
+    frames = sys.argv[1] if len(sys.argv) > 1 else sorted(glob.glob(os.path.join(FIG, "frames_upwindP_2026*")))[-1]
     img = compose(frames)
     path = os.path.join(FIG, f"post_v2_{datetime.now():%Y%m%d_%H%M%S}.png")
     img.save(path, format="PNG", optimize=True)

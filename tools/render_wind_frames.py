@@ -4,10 +4,10 @@ stacked with the light brightening toward its head (tools/compose_post_wind2.py)
 a streak then shows which way the air goes, and its length how fast.
 
     python serve.py                       (or any http server on viewer/, port 8765)
-    .venv-heat/Scripts/python tools/render_wind_frames.py [camera] [exposures] [step]
+    .venv-heat/Scripts/python tools/render_wind_frames.py [camera] [exposures] [step] [2017]
 
 Same headless Chrome and cameras as tools/render_wind.py, never your own
-browser. Writes data/wind/figures/post/frames_<camera>_<stamp>/ with
+browser; "2017" renders the 2017 build. Writes data/wind/figures/post/frames_<camera>[_2017]_<stamp>/ with
 frame_00.png ... and meta.json (camera, tower screen positions, wind).
 """
 
@@ -38,7 +38,9 @@ def main():
     cam = sys.argv[1] if len(sys.argv) > 1 else "upwindP"
     n = int(sys.argv[2]) if len(sys.argv) > 2 else 12
     step = float(sys.argv[3]) if len(sys.argv) > 3 else 1.25
-    out_dir = os.path.join(OUT, f"frames_{cam}_{datetime.now():%Y%m%d_%H%M%S}")
+    y2017 = len(sys.argv) > 4 and sys.argv[4] == "2017"
+    page = "shadow-twin-2017.html" if y2017 else PAGE
+    out_dir = os.path.join(OUT, f"frames_{cam}{'_2017' if y2017 else ''}_{datetime.now():%Y%m%d_%H%M%S}")
     os.makedirs(out_dir)
     prof = tempfile.mkdtemp(prefix="render-wind-frames-")
     proc = subprocess.Popen([CHROME, "--headless=new", f"--remote-debugging-port={PORT}",
@@ -65,7 +67,7 @@ def main():
         tab.call("Runtime.enable")
         tab.call("Emulation.setDeviceMetricsOverride", width=SIZE[0], height=SIZE[1], deviceScaleFactor=1,
                  mobile=False)
-        tab.call("Page.navigate", url=f"{BASE}{PAGE}?{QUERY}&r={int(time.time())}")
+        tab.call("Page.navigate", url=f"{BASE}{page}?{QUERY}&r={int(time.time())}")
         time.sleep(3)
         secs = tab.js(READY, timeout_s=600)
         res = tab.js(SHOOT % {"cam": json.dumps(CAMS[cam]), "n": n, "step": step}, timeout_s=900)
@@ -73,7 +75,7 @@ def main():
             with open(os.path.join(out_dir, f"frame_{k:02d}.png"), "wb") as f:
                 f.write(base64.b64decode(s.split(",", 1)[1]))
         with open(os.path.join(out_dir, "meta.json"), "w", encoding="utf-8", newline="\n") as f:
-            json.dump({"camera": CAMS[cam], "page": PAGE, "query": QUERY, "exposures": n, "step": step,
+            json.dump({"camera": CAMS[cam], "page": page, "query": QUERY, "exposures": n, "step": step,
                        "towers": res["towers"], "wind": res["wind"], "time": res["time"],
                        "size": [res["w"], res["h"]]}, f, indent=1)
         print(f"{cam}: {n} frames, ready in {secs} s, wind {res['wind']} -> {out_dir}", flush=True)
