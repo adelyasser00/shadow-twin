@@ -120,7 +120,10 @@ def key(img, x, y):
     d.text((x + bw + 14, y2), "Streaks: longer and yellower means faster", font=f, fill=(225, 229, 234))
 
 
-def compose(frames_dir):
+HEADLINE = "The new supertalls pull winter wind down to the street"
+
+
+def compose(frames_dir, headline=HEADLINE):
     with open(os.path.join(frames_dir, "meta.json"), encoding="utf-8") as fh:
         meta = json.load(fh)
     img = stack(frames_dir)
@@ -133,7 +136,7 @@ def compose(frames_dir):
            fill=AMBER)
     fh_ = font("Barlow-Bold", 62)
     y = 98
-    for ln in wrap(d, "The new supertalls pull winter wind down to the street", fh_, W - 2 * M):
+    for ln in wrap(d, headline, fh_, W - 2 * M):
         d.text((M, y), ln, font=fh_, fill=(255, 255, 255))
         y += 68
     fs = font("Barlow-Medium", 30)
@@ -221,8 +224,14 @@ def main():
         img.resize((400, 500), Image.LANCZOS).save(path.replace(".png", "_phone400.png"))
         print(f"wrote {path}  {os.path.getsize(path) / 1e6:.2f} MB")
         return 0
-    frames = sys.argv[1] if len(sys.argv) > 1 else sorted(glob.glob(os.path.join(FIG, "frames_upwindP_2026*")))[-1]
-    img = compose(frames)
+    args = sys.argv[1:]
+    headline = HEADLINE
+    if "--headline" in args:
+        k = args.index("--headline")
+        headline = args[k + 1]
+        del args[k:k + 2]
+    frames = args[0] if args else sorted(glob.glob(os.path.join(FIG, "frames_upwindP_2026*")))[-1]
+    img = compose(frames, headline)
     path = os.path.join(FIG, f"post_v2_{datetime.now():%Y%m%d_%H%M%S}.png")
     img.save(path, format="PNG", optimize=True)
     img.resize((400, 500), Image.LANCZOS).save(path.replace(".png", "_phone400.png"))
