@@ -764,8 +764,21 @@ const WIND_SPEEDUP = 20;
 // Under the moving lines the wind map is a backdrop, not the subject.
 const WIND_MAP_ALPHA = 0.55;
 const overlayAlpha = () => opacity * (activeLayer === "wind" && windAnim ? WIND_MAP_ALPHA : 1);
-const WIND_CAVEAT = "Wind simulated in 3D on 8 m cells (lattice Boltzmann, time-mean), scaled " +
-  "to the weather station's wind. Shows where it is windier or calmer, not gusts.";
+const WIND_CAVEAT = "First-round wind model: simulated in 3D on 8 m cells (lattice Boltzmann, time-mean), " +
+  "scaled to the weather station's wind. A wind tunnel check (AIJ) shows 8 m cells read street wind too low " +
+  "in narrow streets, so read it as a pattern of windier and calmer, not as speeds.";
+// The street classes in words, as ratios to the open lawn (no speeds: see WIND_CAVEAT).
+function windClassWord(e) {
+  if (e.max <= 0.2) return "almost still";
+  if (e.max <= 0.4) return "sheltered";
+  if (e.max <= 0.6) return "much calmer";
+  if (e.max <= 0.8) return "calmer";
+  if (e.max <= 1.0) return "a little calmer";
+  if (e.max <= 1.2) return "like the open lawn";
+  if (e.max <= 1.5) return "windier";
+  if (e.max <= 2.0) return "much windier";
+  return "gusty corners";
+}
 const isWind = () => activeLayer === "wind";
 const isFelt = () => activeLayer === "felt" || activeLayer === "change";
 const _windFetch = fetch("wind/wind.json", { cache: "no-cache" })
@@ -1120,7 +1133,6 @@ function windBasemap(on) {
   }
 }
 
-function windSpeedLabel(k, v) { return (k * v).toFixed(1); }
 
 function renderWindChangeLegend(c) {
   const w = windNow();
@@ -1152,16 +1164,12 @@ function renderWindLegend() {
   if (cm) return renderWindChangeLegend(cm);
   const w = windNow(), run = currentWindRun();
   const V = Math.max(0.5, w.speed);
-  const rows = WIND.legend.slice().reverse().map(e => {
-    const lab = e.max >= 3.9 ? `over ${windSpeedLabel(e.min, V)} m/s`
-      : `${windSpeedLabel(e.min, V)} to ${windSpeedLabel(e.max, V)} m/s`;
-    const note = e.min <= 1 && e.max > 1 ? "open lawn" : (e.max <= 0.4 ? "sheltered" : (e.min >= 1.5 ? "gusty corner" : ""));
-    return `<div class="row"><span class="sw" style="background:${e.color}"></span>${lab}` +
-      (note ? ` <span style="color:#79828f;font-size:9.5px">&nbsp;${note}</span>` : "") + `</div>`;
-  });
-  $("legtitle").textContent = "Wind at street level";
+  const rows = WIND.legend.slice().reverse().map(e =>
+    `<div class="row"><span class="sw" style="background:${e.color}"></span>${windClassWord(e)}</div>`);
+  $("legtitle").textContent = "Wind at street level, first-round model";
   $("legunits").textContent = (w.live ? "live, " : "") +
-    `from the ${compass16(w.dir)} (${Math.round(w.dir)}°), ${fmt(V, 1)} m/s on the open lawn` +
+    `compared with the park's open lawns; wind from the ${compass16(w.dir)} (${Math.round(w.dir)}°), ` +
+    `${fmt(V, 1)} m/s at the weather station` +
     (w.live ? "" : `, ${hseason().label.toLowerCase()} ${hstep().time} EST`);
   const lines = windAnim ? `<div style="margin-top:8px;color:#79828f;font-size:9.5px;line-height:1.5">
     Lines follow the simulated wind 2.5 m up and through the air around the towers. The light
@@ -1175,12 +1183,10 @@ function renderWindLegend() {
 }
 
 function renderWindStats() {
-  const w = windNow(), run = currentWindRun();
-  const V = Math.max(0.5, w.speed);
+  const w = windNow();
+  // Only measured wind in m/s here; the model's own speeds are not shown (WIND_CAVEAT).
   const rows = [
-    [w.live ? "Live wind (10 m)" : "Station wind", `${compass16(w.dir)} ${fmt(w.speed, 1)} m/s`],
-    ["Typical spot in the park", run ? `${fmt(run.park_k_median * V, 1)} m/s` : "--"],
-    ["Windiest tenth of the park", run ? `over ${fmt(run.park_k_p90 * V, 1)} m/s` : "--"]
+    [w.live ? "Live wind (10 m)" : "Station wind", `${compass16(w.dir)} ${fmt(w.speed, 1)} m/s`]
   ];
   if (w.live && windLive) rows.push(["Gusts", `${fmt(windLive.gust, 1)} m/s`],
                                     ["Air temperature", `${fmt(windLive.ta, 1)} &deg;C`]);
