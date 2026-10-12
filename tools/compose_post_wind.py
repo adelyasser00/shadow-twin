@@ -141,9 +141,10 @@ def arrowheads(d, lines, every=0.62):
         d.polygon(tri, fill=(28, 30, 35), outline=WHITE)
 
 
-def legend(d, x, y, info, with_numbers):
+def legend(d, x, y, info, with_numbers, model_words=False):
     """Purple ramp, left-aligned, no box."""
-    text(d, (x, y), "Street wind vs 2017", F["lab_b"](25), fill=WHITE, halo=SHADOW)
+    text(d, (x, y), "Model street wind vs 2017" if model_words else "Street wind vs 2017", F["lab_b"](25),
+         fill=WHITE, halo=SHADOW)
     sw, sh, gap = 62, 18, 4
     yy = y + 36
     cols = info["colours"]
@@ -174,7 +175,9 @@ def legend(d, x, y, info, with_numbers):
     text(d, (x, nxt + 28), "beyond the model's noise", f, fill=WHITE, halo=SHADOW)
 
 
-def compose(raw, with_number, headline, number=None):
+def compose(raw, with_number, headline, number=None, model_words=False):
+    # model_words: say on the picture that the street changes are the model's,
+    # for while it has not passed its wind tunnel checks (POST_NOTES.md, A7c).
     with open(raw.replace(".png", ".json"), encoding="utf-8") as fh:
         meta = json.load(fh)
     with open(os.path.join(HERE, "viewer", "wind", "post_windier.json"), encoding="utf-8") as fh:
@@ -195,6 +198,9 @@ def compose(raw, with_number, headline, number=None):
         y += 58
     sub = ("A cold December northwester in 3D, 2017 vs today. Lines: air that comes down the "
            "tower's windward face. Purple: street wind clearly stronger than in 2017.")
+    if model_words:
+        sub = ("A cold December northwester, 2017 vs today. Lines: air coming down the tower's "
+               "windward face. Purple: modelled street wind clearly stronger than in 2017.")
     fs = F["sub"](24)
     for ln in wrap(d, sub, fs, 880):
         text(d, (SAFE[0], y + 4), ln, fs, fill=MUTED)
@@ -226,9 +232,10 @@ def compose(raw, with_number, headline, number=None):
     label(d, SAFE[0], top[1] - 150, ["Air from high up,", "thrown down the face"], (top[0] - 8, top[1] + 24),
           side="r", dark=False)
     canyon = (cpt["roof"][0] + 90, cpt["base"][1] - 177)       # the purple patch in 57th Street's canyon
-    label(d, 620, canyon[1] - 110, ["57th Street", "wind clearly stronger"], canyon, side="b", dark=False)
+    label(d, 620, canyon[1] - 110, ["57th Street", "stronger in the model" if model_words else "wind clearly stronger"],
+          canyon, side="b", dark=False)
     north_arrow(d, SAFE[2] - 30, 840, meta["north"])
-    legend(d, SAFE[0], cpt["base"][1] - 262, info, with_number)
+    legend(d, SAFE[0], cpt["base"][1] - 262, info, with_number, model_words)
     src = ("Time-mean wind, 8 m cells, lattice Boltzmann LES on a laptop GPU. Clear December day, "
            "Central Park typical year. 2017 LiDAR vs today. Map © OpenStreetMap contributors. "
            "Model and map: Adel Yasser Aglan. First-round model.")
@@ -241,7 +248,9 @@ def compose(raw, with_number, headline, number=None):
 
 
 def main():
-    raws = sys.argv[1:] or sorted(glob.glob(os.path.join(FIG, "raw_b1_hero7_*[0-9].png")))[-1:]
+    model_words = "--model-words" in sys.argv
+    raws = [a for a in sys.argv[1:] if a != "--model-words"]
+    raws = raws or sorted(glob.glob(os.path.join(FIG, "raw_b1_hero7_*[0-9].png")))[-1:]
     if not raws:
         raise SystemExit("no raw render; run tools/render_post_wind.py b1_hero first")
     import csv
@@ -255,8 +264,8 @@ def main():
     headline = "Central Park Tower pulls the wind down to the street"
     out = []
     for raw in raws:
-        for tag, with_n in (("nonumber", False), ("number", True)):
-            img = compose(raw, with_n, headline, number)
+        for tag, with_n in ((("nonumber_model", False),) if model_words else (("nonumber", False), ("number", True))):
+            img = compose(raw, with_n, headline, number, model_words)
             path = os.path.join(FIG, f"post_b1_{tag}_{stamp}.png")
             img.save(path, format="PNG", optimize=True)
             img.resize((400, 500), Image.LANCZOS).save(path.replace(".png", "_phone400.png"))
