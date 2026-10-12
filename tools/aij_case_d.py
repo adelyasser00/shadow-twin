@@ -7,7 +7,7 @@ with the tunnel's probes. The rules (resolution, thresholds, how probes are
 read) were fixed in POST_NOTES.md, Part A, before the first run.
 
     .venv-heat/Scripts/python -I tools/aij_case_d.py check
-    .venv-heat/Scripts/python -I tools/aij_case_d.py run [--res 8 4] [--dir 0 22.5 45] [--mirror]
+    .venv-heat/Scripts/python -I tools/aij_case_d.py run [--res 8 4] [--dir 0 22.5 45] [--mirror] [--box trim]
     .venv-heat/Scripts/python -I tools/aij_case_d.py score
 
 Input: the AIJ data file, data/wind/aij/wayback/CaseD(Highrise+Blocks)_*.xls
@@ -65,6 +65,11 @@ TOWER_HALF_M, TOWER_H_M = 12.5, 100.0
 Z_REF_M = 100.0                 # UH: the approach wind at the tower's height
 
 BOX = {"length_m": 1600.0, "width_m": 1000.0, "height_m": 300.0, "tower_from_inlet_m": 600.0}
+# A smaller box that fits 2 m cells in the GPU's memory (22 M cells; a 1 GB
+# buffer per lattice caps it near 28 M). It still holds the whole block array
+# at every turn. For the diagnostic after the verdict only (POST_NOTES.md, A6).
+BOX_TRIM = {"length_m": 1000.0, "width_m": 720.0, "height_m": 240.0, "tower_from_inlet_m": 400.0}
+BOXES = {"full": BOX, "trim": BOX_TRIM}
 KAPPA_UVW = 0.5 * (1 + 0.75 ** 2 + 0.5 ** 2)    # k = this * sigma_u^2 for our gust ratios
 
 # The gate (POST_NOTES.md, A1), decided at 8 m only.
@@ -123,12 +128,14 @@ def height_at(x, y):
 class AijBox:
     """The turned box: x downwind, y to its left; the tower centre on a cell centre."""
 
-    def __init__(self, theta, res, mirror=False):
+    def __init__(self, theta, res, mirror=False, box="full"):
         self.theta, self.res, self.mirror = float(theta), float(res), bool(mirror)
-        self.nx = int(round(BOX["length_m"] / res))
-        self.ny = int(round(BOX["width_m"] / res))
-        self.nz = int(round(BOX["height_m"] / res)) + 1      # + the solid ground layer
-        self.ic = int(round(BOX["tower_from_inlet_m"] / res))
+        self.box = box
+        size = BOXES[box]
+        self.nx = int(round(size["length_m"] / res))
+        self.ny = int(round(size["width_m"] / res))
+        self.nz = int(round(size["height_m"] / res)) + 1     # + the solid ground layer
+        self.ic = int(round(size["tower_from_inlet_m"] / res))
         self.jc = self.ny // 2
         t = math.radians(-theta if mirror else theta)
         self.ex = np.array([math.cos(t), math.sin(t)])
@@ -146,7 +153,7 @@ class AijBox:
         return a / self.res + self.ic, b / self.res + self.jc
 
     def meta(self):
-        return {"theta": self.theta, "res_m": self.res, "mirror": self.mirror, "nx": self.nx,
+        return {"theta": self.theta, "res_m": self.res, "mirror": self.mirror, "box_name": self.box, "nx": self.nx,
                 "ny": self.ny, "nz": self.nz, "ic": self.ic, "jc": self.jc}
 
 
@@ -179,18 +186,18 @@ def inlet(inflow, bx):
     return prof, iu, float(at(np.array([Z_REF_M]), u)[0] * scale)
 
 
-def run_name(theta, res, mirror):
-    return f"d{theta:04.1f}_{res:g}m" + ("_mirror" if mirror else "")
+def run_name(theta, res, mirror, box="full"):
+    return f"d{theta:04.1f}_{res:g}m" + ("_mirror" if mirror else "") + ("" if box == "full" else f"_{box}")
 
 
-def run_one(theta, res, mirror=False, log=print, force=False):
-    out = os.path.join(RUNS, run_name(theta, res, mirror))
+def run_one(theta, res, mirror=False, log=print, force=False, box="full"):
+    out = os.path.join(RUNS, run_name(theta, res, mirror, box))
     if os.path.exists(os.path.join(out, "run.json")) and not force:
         log(f"  {os.path.basename(out)}: already done")
         return out
     t0 = time.time()
     inflow, _ = read_data()
-    bx = AijBox(theta, res, mirror)
+    bx = AijBox(theta, res, mirror, box)
     solid, bh, kfirst = voxelise(bx)
     prof, iu, uh = inlet(inflow, bx)
     turb = InflowTurbulence(prof, 1, res, bx.ny, iu=iu)
@@ -227,7 +234,7 @@ def run_one(theta, res, mirror=False, log=print, force=False):
                         u=street[:3].astype(np.float32), kfirst=kfirst, building=bh.astype(np.float32),
                         speed_low=mean[4, :nkeep].astype(np.float16), u_low=mean[:3, :nkeep].astype(np.float16),
                         profile=prof, iu=iu)
-    meta = {"box": bx.meta(), "box_size": BOX, "uh_lattice": uh, "z_ref_m": Z_REF_M,
+    meta = {"box": bx.meta(), "box_size": BOXES[box], "uh_lattice": uh, "z_ref_m": Z_REF_M,
             "tau0": 0.5005, "smagorinsky": 0.17, "walls": "slip + wall-law drag", "z0_m": Z0_M,
             "wall_cd": round(s.cd_wall, 5), "inflow": "measured U/UH and k (AIJ Case D, Inflow sheet)",
             "flow_through_steps": round(ft), "spinup_steps": n_spin, "average_steps": n_avg,
@@ -253,7 +260,7 @@ def sample(run_dir, probes):
     with open(os.path.join(run_dir, "run.json"), encoding="utf-8") as f:
         meta = json.load(f)
     b = meta["box"]
-    bx = AijBox(b["theta"], b["res_m"], b["mirror"])
+    bx = AijBox(b["theta"], b["res_m"], b["mirror"], b.get("box_name", "full"))
     z = np.load(os.path.join(run_dir, "street.npz"))
     street = z["kfirst"] == 1
     fi, fj = bx.from_probe(probes[:, 1], probes[:, 2])
@@ -330,10 +337,13 @@ def figure(probes, results):
     fig, axs = plt.subplots(1, 3, figsize=(15, 5.4), dpi=110)
     for ax, d in zip(axs, DIRS):
         meas = probes[:, 3 + DIRS.index(d)]
-        for res, mirror, style in ((8.0, False, dict(color="#1f4e8c", marker="o", s=26, label="8 m")),
-                                   (4.0, False, dict(color="#d08a00", marker="s", s=18, label="4 m")),
-                                   (8.0, True, dict(color="#999999", marker="x", s=18, label="8 m, mirrored turn"))):
-            name = run_name(d, res, mirror)
+        for res, mirror, box, style in ((8.0, False, "full", dict(color="#1f4e8c", marker="o", s=26, label="8 m")),
+                                        (4.0, False, "full", dict(color="#d08a00", marker="s", s=18, label="4 m")),
+                                        (2.0, False, "trim", dict(color="#2e8b57", marker="^", s=22,
+                                                                  label="2 m, smaller box")),
+                                        (8.0, True, "full", dict(color="#999999", marker="x", s=18,
+                                                                 label="8 m, mirrored turn"))):
+            name = run_name(d, res, mirror, box)
             if name not in results:
                 continue
             sim, _, _ = sample(os.path.join(RUNS, name), probes)
@@ -343,6 +353,8 @@ def figure(probes, results):
         ax.fill_between([0, 1.2], [0, 0.9], [0, 1.5], color="k", alpha=0.06, lw=0)
         txt = [f"{lab}: r {results[n]['r']:.2f}, near err {results[n]['near_mean_abs_rel_err']:.2f}"
                for lab, n in (("8 m", run_name(d, 8.0, False)), ("4 m", run_name(d, 4.0, False)),
+                              ("4 m, small box", run_name(d, 4.0, False, "trim")),
+                              ("2 m, small box", run_name(d, 2.0, False, "trim")),
                               ("mirror", run_name(d, 8.0, True))) if n in results]
         ax.text(0.03, 1.15, "\n".join(txt), va="top", fontsize=9)
         ax.set_xlim(0, 1.2)
@@ -397,6 +409,7 @@ def main():
     ap.add_argument("--res", type=float, nargs="*", default=[8.0, 4.0])
     ap.add_argument("--dir", type=float, nargs="*", default=list(DIRS))
     ap.add_argument("--mirror", action="store_true", help="also run the opposite turn at 8 m (diagnostic)")
+    ap.add_argument("--box", choices=tuple(BOXES), default="full", help="trim: the smaller box (diagnostic)")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
     t0 = time.time()
@@ -409,7 +422,7 @@ def main():
     elif args.what == "run":
         for res in args.res:
             for d in args.dir:
-                run_one(d, res, log=log, force=args.force)
+                run_one(d, res, log=log, force=args.force, box=args.box)
         if args.mirror:
             for d in args.dir:
                 if d:
