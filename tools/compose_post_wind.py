@@ -175,7 +175,7 @@ def legend(d, x, y, info, with_numbers, model_words=False):
     text(d, (x, nxt + 28), "beyond the model's noise", f, fill=WHITE, halo=SHADOW)
 
 
-def compose(raw, with_number, headline, number=None, model_words=False):
+def compose(raw, with_number, headline, number=None, model_words=False, nest=False):
     # model_words: say on the picture that the street changes are the model's,
     # for while it has not passed its wind tunnel checks (POST_NOTES.md, A7c).
     with open(raw.replace(".png", ".json"), encoding="utf-8") as fh:
@@ -235,10 +235,17 @@ def compose(raw, with_number, headline, number=None, model_words=False):
     label(d, 620, canyon[1] - 110, ["57th Street", "stronger in the model" if model_words else "wind clearly stronger"],
           canyon, side="b", dark=False)
     north_arrow(d, SAFE[2] - 30, 840, meta["north"])
-    legend(d, SAFE[0], cpt["base"][1] - 262, info, with_number, model_words)
+    # nest: the number at the tower comes from the 2 m box (tools/wind_nest.py);
+    # the purple map stays the 8 m run's, so its classes carry no numbers.
+    legend(d, SAFE[0], cpt["base"][1] - 262, info, with_number and not nest, model_words)
     src = ("Time-mean wind, 8 m cells, lattice Boltzmann LES on a laptop GPU. Clear December day, "
            "Central Park typical year. 2017 LiDAR vs today. Map © OpenStreetMap contributors. "
            "Model and map: Adel Yasser Aglan. First-round model.")
+    if nest:
+        src = ("Time-mean wind, lattice Boltzmann LES on a laptop GPU. The tower's number: 2 m cells, "
+               "a resolution rule that passed two AIJ wind tunnel checks. Purple: 8 m cells, first round. "
+               "Clear December day. 2017 LiDAR vs today. Map © OpenStreetMap contributors. "
+               "Model and map: Adel Yasser Aglan.")
     fm = F["mono"](19)
     sl = wrap(d, src, fm, 880)
     y0 = SAFE[3] - len(sl) * 26 + 4
@@ -248,8 +255,14 @@ def compose(raw, with_number, headline, number=None, model_words=False):
 
 
 def main():
-    model_words = "--model-words" in sys.argv
-    raws = [a for a in sys.argv[1:] if a != "--model-words"]
+    args = sys.argv[1:]
+    model_words = "--model-words" in args
+    nest_score = None
+    if "--nest-score" in args:
+        k = args.index("--nest-score")
+        nest_score = args[k + 1]
+        del args[k:k + 2]
+    raws = [a for a in args if a != "--model-words"]
     raws = raws or sorted(glob.glob(os.path.join(FIG, "raw_b1_hero7_*[0-9].png")))[-1:]
     if not raws:
         raise SystemExit("no raw render; run tools/render_post_wind.py b1_hero first")
@@ -260,12 +273,18 @@ def main():
         for r in csv.DictReader(fh):
             if r["key"] == "central_park_tower_street_change_pct":
                 number = float(r["value"])
+    if nest_score:
+        # The 2 m number, rounded to 10% (POST_NOTES.md, A8).
+        with open(nest_score, encoding="utf-8") as fh:
+            number = round(json.load(fh)["change_pct_2m"] / 10.0) * 10.0
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     headline = "Central Park Tower pulls the wind down to the street"
     out = []
     for raw in raws:
-        for tag, with_n in ((("nonumber_model", False),) if model_words else (("nonumber", False), ("number", True))):
-            img = compose(raw, with_n, headline, number, model_words)
+        tags = ((("number2m_model", True),) if nest_score else
+                (("nonumber_model", False),) if model_words else (("nonumber", False), ("number", True)))
+        for tag, with_n in tags:
+            img = compose(raw, with_n, headline, number, model_words or bool(nest_score), nest=bool(nest_score))
             path = os.path.join(FIG, f"post_b1_{tag}_{stamp}.png")
             img.save(path, format="PNG", optimize=True)
             img.resize((400, 500), Image.LANCZOS).save(path.replace(".png", "_phone400.png"))
