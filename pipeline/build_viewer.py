@@ -31,8 +31,11 @@ import json
 import os
 import shutil
 
+from . import city as _city
+
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VIEWER = os.path.join(HERE, "viewer")
+VIEWER = os.path.join(HERE, "viewer")          # the template lives here; New York's pages too
+OUT = VIEWER
 OUT_NAME = "shadow-twin.html"
 SPLIT_ABOVE_MB = 6.0
 DATA_FILE_ABOVE_MB = 1.0         # model data bigger than this gets its own file
@@ -60,7 +63,7 @@ def _images(d):
 def split_images(d, tag):
     """Write inline images to viewer/frames-<tag>/ and point the data at them."""
     folder = f"frames-{tag}"
-    path = os.path.join(VIEWER, folder)
+    path = os.path.join(OUT, folder)
     if os.path.isdir(path):
         shutil.rmtree(path)      # stale frames from an older run must not survive
     os.makedirs(path)
@@ -83,15 +86,29 @@ def split_images(d, tag):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data", default=os.path.join(VIEWER, "data.json"))
+    ap.add_argument("--data", default=None,
+                    help="default viewer/data.json, or the city's data_today.json with TWIN_CITY")
+    ap.add_argument("--out-dir", default=None,
+                    help="where the pages go: viewer/ for New York, the city's viewer folder otherwise")
     ap.add_argument("--name", default=None, help="override the scenario tag, e.g. today")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--inline", action="store_true", help="one self-contained file")
     g.add_argument("--split", action="store_true", help="images in their own folder")
     args = ap.parse_args()
+    global OUT
+    nyc = _city.city_id() == "nyc"
+    OUT = args.out_dir or (VIEWER if nyc else _city.viewer_dir())
+    os.makedirs(OUT, exist_ok=True)
+    if args.data is None:
+        args.data = os.path.join(VIEWER, "data.json") if nyc else os.path.join(OUT, "data_today.json")
 
     with open(os.path.join(VIEWER, "template.html"), encoding="utf-8") as f:
         html = f.read()
+    # Another city: the template's New York words, swapped per cities/<id>.json.
+    for old, new in ([] if nyc else _city.get("viewer.replace", [])):
+        if old not in html:
+            print(f"  note: '{old[:40]}' is not in the template")
+        html = html.replace(old, new)
     with open(args.data, encoding="utf-8") as f:
         d = json.load(f)
     if "/*__DATA__*/" not in html:
@@ -111,14 +128,14 @@ def main():
         # small: link previews (LinkedIn reads at most 3 MiB) and a first paint
         # that is not waiting on the whole model.
         data_file = f"data-{tag}.json"
-        with open(os.path.join(VIEWER, data_file), "w", encoding="utf-8", newline="\n") as f:
+        with open(os.path.join(OUT, data_file), "w", encoding="utf-8", newline="\n") as f:
             f.write(raw)
         ver = hashlib.sha1(raw.encode()).hexdigest()[:8]
         raw = json.dumps(f"{data_file}?v={ver}")
     out = html.replace("/*__DATA__*/", raw.replace("</script>", "<\\/script>"))
     written = []
     for name in (OUT_NAME, f"shadow-twin-{tag}.html"):
-        path = os.path.join(VIEWER, name)
+        path = os.path.join(OUT, name)
         # Unix line endings always, even on Windows. The comparison mode reads the
         # other build's data line by line, and mixed endings are how it broke.
         with open(path, "w", encoding="utf-8", newline="\n") as f:
@@ -131,7 +148,7 @@ def main():
     print(f"  and {written[1]}")
     print(f"  page        {mb:.2f} MB")
     if data_file:
-        mb_d = os.path.getsize(os.path.join(VIEWER, data_file)) / 1024 / 1024
+        mb_d = os.path.getsize(os.path.join(OUT, data_file)) / 1024 / 1024
         print(f"  data        {mb_d:.2f} MB in viewer/{data_file}, fetched by the page")
     if split:
         print(f"  images      {n_img} files, {img_bytes/1024/1024:.1f} MB in viewer/{folder}/, "
