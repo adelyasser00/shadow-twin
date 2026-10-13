@@ -22,6 +22,21 @@ streets.
 **Basemap tiles.** OpenStreetMap contributors, via the standard tile server.
 Rendered in the viewer under the OpenStreetMap licence.
 
+**Rotterdam.** 3DBAG v2025.09.03 by the 3D geoinformation research group,
+TU Delft (CC BY 4.0), from the BAG (Kadaster) and AHN; used for outlines,
+build years and ground level. Actueel Hoogtebestand Nederland: AHN3 0.5 m
+DSM and DTM (CC0) and AHN5 2023 0.5 m DSM (Het Waterschapshuis, CC BY 4.0),
+via the GeoTiles mirror (TU Delft). BGT water and vegetation parts and CBS
+Wijk- en Buurtkaart 2024 via PDOK (CC BY 4.0). Rotterdam The Hague Airport
+TMYx 2011-2025, climate.onebuilding.org.
+
+**Dubai (prepared).** Overture Maps Foundation buildings (ODbL; OpenStreetMap
+contributors). Meta and World Resources Institute Global Canopy Height v2
+(CC BY 4.0). Copernicus DEM GLO-30 (ESA, Airbus; Copernicus licence). Dubai
+International Airport TMYx 2011-2025, climate.onebuilding.org.
+
+None of these data are redistributed in this repository.
+
 **Wind tunnel benchmark.** Architectural Institute of Japan, *Guidebook for
 CFD Predictions of Urban Wind Environment* (2007), test case D, "A
 high-rise building in city blocks"

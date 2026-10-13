@@ -487,6 +487,48 @@ data/wind/aij/wayback_a/:
 
 ---
 
+## Other cities
+
+The engines (sun, shadow sweep, SOLWEIG heat, the wind solver) never name a
+city. One JSON file per city in `cities/` says what differs: projection,
+clock, weather file, analysis days, study area, wind reference spot,
+scenarios and data sources. `TWIN_CITY=<id>` picks the city for every stage;
+without it everything is New York, as published.
+
+`pipeline/city_inputs.py` builds any city's inputs in the files the engines
+already read. New York goes through its published code: rebuilt this way,
+its heat inputs are bit-identical to the published ones, and its wind canvas
+reproduces the stored runs' voxels exactly.
+
+- **Rotterdam** (`cities/rotterdam.json`, work in progress): Zalmhaven and
+  the Scheepvaartkwartier, at the foot of the Erasmus Bridge. Two national
+  LiDAR surveys: AHN3 (2014-2016) is "before", measured; today raises the
+  buildings that grew to AHN5's 2023 roofs, New York's 6 m rule. Outlines
+  and build years from 3DBAG; water and grass from the BGT; trees only where
+  both surveys see them; cranes caught mid-construction filtered out.
+- **Dubai** (`cities/dubai.json`, prepared, waiting for official data):
+  Downtown from Overture building parts, Meta's canopy height and
+  Copernicus GLO-30 with the buildings taken out. One scenario. Official 3D
+  buildings drop in by changing the config's sources.
+
+```
+.venv-heat/Scripts/python -I tools/get_city_data.py rotterdam
+set TWIN_CITY=rotterdam
+.venv-heat/Scripts/python -m pipeline.city_inputs
+.venv-heat/Scripts/python -m pipeline.city_shade
+.venv-heat/Scripts/python -m pipeline.city_shade --towers
+.venv-heat/Scripts/python -m pipeline.heat_weather data/cities/rotterdam/heat/weather/<file>.epw
+.venv-heat/Scripts/python -m pipeline.run_heat --all --cpu
+.venv-heat/Scripts/python -m pipeline.verify_heat
+.venv-heat/Scripts/python -m pipeline.wind_domain
+.venv-heat/Scripts/python -m pipeline.run_wind --queue hero story grid
+.venv-heat/Scripts/python -m pipeline.wind_export
+.venv-heat/Scripts/python -m pipeline.build_viewer
+.venv-heat/Scripts/python tools/city_qa.py
+```
+
+---
+
 ## Data
 
 - NYC 2017 topobathymetric LiDAR, via NYC's orthoimagery finder.
