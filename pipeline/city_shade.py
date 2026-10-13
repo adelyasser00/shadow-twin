@@ -406,6 +406,9 @@ def tno(day="feb", need_h=2.0, levels=4, log=print, focus_only=False):
         f"{out['lost_1h_or_more']} lost an hour or more")
     out["focus_only"] = bool(focus_only)
     tag = f"tno_{day}" + ("_focus_only" if focus_only else "")
+    # Every building's sunniest lower wall, both years, for tools/city_tno_homes.py.
+    np.savez_compressed(os.path.join(shade_dir(), f"{tag}_buildings.npz"), label=ids,
+                        before_h=b0[ids], today_h=b1[ids], need_h=need_h)
     with open(os.path.join(shade_dir(), f"{tag}.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(out, f, indent=1)
     return out
