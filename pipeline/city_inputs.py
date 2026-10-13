@@ -257,7 +257,7 @@ def december_suns(lat, lon, utc_offset, step_min=5, pad_min=15):
 def build_survey_grown(cfg, log=print):
     from pyproj import Transformer
     from scipy import ndimage
-    from shapely.geometry import Point, box
+    from shapely.geometry import box
     from .grid import convergence_deg
 
     crs = cfg["crs"]
@@ -265,7 +265,6 @@ def build_survey_grown(cfg, log=print):
     src = cfg["sources"]
     to_ll = Transformer.from_crs(crs, "EPSG:4326", always_xy=True).transform
     to_crs = Transformer.from_crs("EPSG:4326", crs, always_xy=True).transform
-    survey_year = int(cfg["survey_year"])
 
     # ---- buildings in a wide box around the study areas -----------------
     import geopandas as gpd
@@ -377,7 +376,6 @@ def build_survey_grown(cfg, log=print):
     labels = burn(list(inside.geometry), grid)
     n = len(inside)
     fp = labels > 0
-    gl = np.concatenate([[0.0], inside["b3_h_maaiveld"].to_numpy(np.float32)])
     log(f"  {n:,} footprints on the grid, {fp.mean() * 100:.1f}% of it")
 
     nodata = np.zeros_like(fp)        # both surveys cover the whole domain

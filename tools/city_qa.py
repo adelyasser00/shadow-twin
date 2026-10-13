@@ -118,7 +118,7 @@ def main():
         tab.call("Log.enable")
         tab.call("Network.enable")
         tab.call("Emulation.setDeviceMetricsOverride", width=1600, height=1000, deviceScaleFactor=1, mobile=False)
-        pages = [f"shadow-twin.html", f"shadow-twin-{city.before()}.html"]
+        pages = ["shadow-twin.html", f"shadow-twin-{city.before()}.html"]
         for page in pages:
             tab.events.clear()
             url = f"{BASE}{rel}/{page}" + (f"?{query}" if query else "")

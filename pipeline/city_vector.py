@@ -101,8 +101,7 @@ def build_vector_parts(cfg, log=print):
     from pyproj import Transformer
     from scipy import ndimage
     from shapely.geometry import box
-    from .city_inputs import burn, fill_nearest, make_grid, check_invariants  # noqa: F401
-    from .grid import convergence_deg  # noqa: F401
+    from .city_inputs import burn, fill_nearest, make_grid
     from .heat_inputs import shadow_reaches
     from .city_inputs import december_suns
 
@@ -227,7 +226,7 @@ def build_vector_parts(cfg, log=print):
                      "report": float(report.sum() * RES_M ** 2 / 1e4)},
         "grown_buildings": [],
     }
-    log(f"tallest: " + ", ".join(f"{t['name'] or '?'} {t['top_m']:.0f} m" for t in meta["tallest"][:6]))
+    log("tallest: " + ", ".join(f"{t['name'] or '?'} {t['top_m']:.0f} m" for t in meta["tallest"][:6]))
     log(f"heights: {meta['heights']['from_height_ha']} ha from height tags, {meta['heights']['from_floors_ha']} ha "
         f"from floors, {meta['heights']['gap_ha']} ha gaps; in the window {meta['heights']['window_gap_share_of_area'] * 100:.0f}% "
         "of building area is a gap")

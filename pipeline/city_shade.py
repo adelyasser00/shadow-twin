@@ -284,7 +284,7 @@ def towers(min_m=70.0, day="dec", log=print):
     tall = np.zeros(int(lab.max()) + 1, bool)
     tall[[r["label"] for r in out]] = True
     groups = {f"all towers of {min_m:.0f} m or more": raised & tall[lab],
-              f"everything else that grew": raised & ~tall[lab],
+              "everything else that grew": raised & ~tall[lab],
               "all of it (today)": raised}
     for name, cells in groups.items():
         s = np.where(cells, now, before).astype(np.float32)
