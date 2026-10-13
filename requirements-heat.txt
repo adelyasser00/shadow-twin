@@ -8,6 +8,9 @@ websocket-client>=1.8
 #   numpy<2.4  solweig==0.1.0b96  umep==0.0.1b47
 # Wind layer: the GPU solver runs through OpenCL (any GPU with a current driver)
 pyopencl>=2024.1
+# The same solver on CUDA, for cloud GPUs (tools/nest_cloud.py), needs CuPy in
+# its own environment: pip install cupy-cuda12x scipy pyopencl
+# (plus nvidia-cuda-nvrtc-cu12 nvidia-cuda-runtime-cu12 without a CUDA toolkit)
 # tools/clip_wind.py encodes MP4 with the ffmpeg this package ships
 imageio-ffmpeg>=0.5
 # tools/aij_case_d.py reads the AIJ wind tunnel benchmark's .xls
