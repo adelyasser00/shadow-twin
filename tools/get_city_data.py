@@ -165,10 +165,10 @@ def dubai():
         if os.path.exists(dst) and os.path.getsize(dst) > 100_000:
             continue
         src = f"s3://overturemaps-us-west-2/release/2026-09-23.1/theme=buildings/type={typ}/*"
-        extra = "building_id," if typ == "building_part" else "has_parts,"
+        extra = "building_id," if typ == "building_part" else "has_parts, class, subtype,"
         con.execute(f"""COPY (
             SELECT id, {extra} names.primary AS name, height, min_height, num_floors, min_floor,
-                   roof_height, class, subtype,
+                   roof_height,
                    list_filter(sources, s -> s.dataset = 'OpenStreetMap')[1].record_id AS osm_id,
                    sources[1].dataset AS source, geometry
             FROM read_parquet('{src}', hive_partitioning=1)
