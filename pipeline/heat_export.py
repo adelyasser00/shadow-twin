@@ -294,6 +294,9 @@ def main():
     for season, label, short, control in (
             ("dec", "Clear December day", "Dec", False),
             ("jun", "Clear June day (control)", "Jun", True)):
+        if not all(os.path.isdir(os.path.join(runs_dir(), f"{sc}_{season}")) for sc in (BEFORE, "today")):
+            print(f"{season}: runs not there yet, season skipped", flush=True)
+            continue
         sd = d["seasons"][season]
         wl = {w.datetime: w for w in weather_list(season)}
         steps = []

@@ -301,6 +301,16 @@ def towers(min_m=70.0, day="dec", log=print):
             f"on {rec['ha_lost_1h']} ha, all of it on {rec['ha_lost_all']} ha")
     with open(os.path.join(shade_dir(), f"towers_{day}.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(out, f, indent=1)
+    # The viewer draws these towers in the "grew since" amber (heat_export
+    # reads heat/compare/towers.json; New York's comes from compare_heat).
+    viewer_towers = [{"lonlat": r["lonlat"], "height_m": r["height_m"], "lidar_p99_m": r["lidar_p99_m"],
+                      "cells": r["cells_raised"], "year": r["year"], "id": r["id"],
+                      "shade_dec_ha_lost_any": r["ha_lost_any"], "shade_dec_ha_lost_1h": r["ha_lost_1h"]}
+                     for r in out if "lonlat" in r]
+    cdir = os.path.join(city.heat_dir(), "compare")
+    os.makedirs(cdir, exist_ok=True)
+    with open(os.path.join(cdir, "towers.json"), "w", encoding="utf-8", newline="\n") as f:
+        json.dump(viewer_towers, f, indent=1)
     return out
 
 
