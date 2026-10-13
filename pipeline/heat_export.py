@@ -288,7 +288,8 @@ def main():
 
     felt_cols = felt_palette()
     chg_cols = change_palette()
-    bmask = building[fsl]
+    # Outside New York the frame holds rivers and harbours: leave water blank.
+    bmask = building[fsl] if _city.city_id() == "nyc" else (building | masks["water"])[fsl]
     d = days()
     seasons = []
     for season, label, short, control in (

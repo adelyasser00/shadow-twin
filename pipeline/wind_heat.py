@@ -146,7 +146,7 @@ def main():
     idx, bounds = grid.northup_index()
     painter = export.Painter(idx, bounds)
     to_ll = Transformer.from_crs(grid.crs, "EPSG:4326", always_xy=True).transform
-    bmask = masks["building"][fsl]
+    bmask = masks["building"][fsl] if NYC else (masks["building"] | masks["water"])[fsl]
     felt_cols, chg_cols = felt_palette(), change_palette()
     runs = runs_available()
     version = datetime.now().strftime("%Y%m%d%H%M%S")
