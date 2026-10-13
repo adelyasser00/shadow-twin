@@ -263,6 +263,17 @@ def parent_ring_speed(sc, theta, parent_tag, x, y, ring):
     return resample(run["street_speed"], run["ok"], RunBox(m), x[ring], y[ring])
 
 
+def score_path(theta, width=NEST["width_m"], average=AVERAGE_HERO, sides="periodic", parent_tag="",
+               length=NEST["length_m"], height=NEST["height_m"]):
+    tag = (("" if width == NEST["width_m"] else f"_w{width:g}")
+           + ("" if length == NEST["length_m"] else f"_l{length:g}")
+           + ("" if height == NEST["height_m"] else f"_h{height:g}")
+           + ("" if average == AVERAGE_HERO else f"_avg{average:g}")
+           + ("" if sides == "periodic" else "_sides")
+           + (f"_p{parent_tag.strip('_')}" if parent_tag else ""))
+    return os.path.join(OUT, f"score_{theta:05.1f}{tag}.json")
+
+
 def score(theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_HERO, sides="periodic",
           parent_tag="", length=NEST["length_m"], height=NEST["height_m"]):
     from pipeline.wind_export import RunBox, resample
@@ -293,13 +304,8 @@ def score(theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_
            "change_pct_2m_next_cell_up": round((b["median_2m_next_cell_up"] / a["median_2m_next_cell_up"] - 1) * 100,
                                                1),
            "generated": datetime.now().isoformat(timespec="seconds")}
-    tag = (("" if width == NEST["width_m"] else f"_w{width:g}")
-           + ("" if length == NEST["length_m"] else f"_l{length:g}")
-           + ("" if height == NEST["height_m"] else f"_h{height:g}")
-           + ("" if average == AVERAGE_HERO else f"_avg{average:g}")
-           + ("" if sides == "periodic" else "_sides")
-           + (f"_p{parent_tag.strip('_')}" if parent_tag else ""))
-    with open(os.path.join(OUT, f"score_{theta:05.1f}{tag}.json"), "w", encoding="utf-8", newline="\n") as f:
+    with open(score_path(theta, width, average, sides, parent_tag, length, height), "w", encoding="utf-8",
+              newline="\n") as f:
         json.dump(out, f, indent=1)
     log(f"  {TOWER}, {theta:g} deg, box {length:g} x {width:g} x {height:g} m, {average:g} flow-throughs, street ring {RING_M[0]:g}-{RING_M[1]:g} m, sides {sides}: change since {BEFORE} "
         f"{out['change_pct_2m']:+.1f}% at 2 m (windiest tenth {out['change_p90_pct_2m']:+.1f}%), "

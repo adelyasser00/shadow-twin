@@ -226,9 +226,13 @@ def unpack(args):
                         m["box_size"]["height_m"], m["average_flow_throughs"], m["sides"], m["parent"].split("8m", 1)[-1])
                        for m in done}):
         theta, width, length, height, average, sides, tag = key
+        sides = "periodic" if sides == "periodic" else "parent"
+        sp = N.score_path(theta, width, average, sides, tag, length, height)
+        if os.path.exists(sp):
+            print(f"  {os.path.basename(sp)}: already scored")
+            continue
         try:
-            N.score(theta, width=width, average=average, sides="periodic" if sides == "periodic" else "parent",
-                    parent_tag=tag, length=length, height=height)
+            N.score(theta, width=width, average=average, sides=sides, parent_tag=tag, length=length, height=height)
         except (OSError, SystemExit) as e:
             print(f"  not scored yet ({e}): both years are needed")
 
