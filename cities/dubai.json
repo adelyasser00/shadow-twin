@@ -98,5 +98,54 @@
    ],
    "spot_name": "Burj Park"
   }
+ },
+ "viewer": {
+  "note": "build_viewer swaps the template's New York words for these (old, new) pairs",
+  "replace": [
+   [
+    "<title>Shadow twin: Central Park</title>",
+    "<title>Shadow twin: Downtown Dubai</title>"
+   ],
+   [
+    "content=\"Shadow twin: Central Park, Manhattan\"",
+    "content=\"Shadow twin: Downtown Dubai\""
+   ],
+   [
+    "Interactive 3D twin of Central Park: where the shadows fall hour by hour, and how much colder the park feels in winter since the new supertalls went up. From NYC's own LiDAR and building data.",
+    "Interactive 3D twin of Downtown Dubai: where Burj Khalifa and its neighbours cast shade hour by hour. Prepared on open data (Overture, Meta canopy, Copernicus DEM) until official 3D buildings arrive."
+   ],
+   [
+    "Shadows on Central Park hour by hour, and where the new towers make it feel colder. From public LiDAR. Open source.",
+    "Shade in Downtown Dubai hour by hour. Open data, open source."
+   ],
+   [
+    "Interactive shadow and felt-temperature study of Central Park from NYC LiDAR and building footprints, following the CEQR analysis method.",
+    "Interactive shade study of Downtown Dubai from open building parts, following the CEQR analysis method."
+   ],
+   [
+    "EST, CEQR window",
+    "GST, CEQR window"
+   ],
+   [
+    "} EST`",
+    "} GST`"
+   ],
+   [
+    "} EST, ${",
+    "} GST, ${"
+   ],
+   [
+    ", EST. Medians",
+    ", GST. Medians"
+   ],
+   [
+    "+ \" EST\"",
+    "+ \" GST\""
+   ],
+   [
+    "<b>Central Park</b>",
+    "<b>Downtown Dubai</b>"
+   ]
+  ]
  }
 }

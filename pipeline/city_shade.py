@@ -72,6 +72,10 @@ def buildings_for_viewer(in_dir, grid, layers, masks, scenario, ring_m=200.0, ta
     lab = masks["labels"]
     h = label_quantile((layers[f"dsm_{scenario}"] - layers["dem"]).astype(np.float32), lab, int(lab.max()), 0.99)
     df["height"] = [float(h[i]) if i < len(h) and np.isfinite(h[i]) else 0.0 for i in df["label"]]
+    if "top_m" in df.columns:
+        # Buildings drawn by their parts (Dubai): each part at its own top,
+        # so Burj Khalifa keeps its setbacks in the viewer too.
+        df["height"] = df["top_m"].astype(float)
     frame = grid.frame_polygon_crs()
     ring = frame.buffer(ring_m)
     ll = df.to_crs("EPSG:4326")
