@@ -81,7 +81,7 @@ def buildings_for_viewer(in_dir, grid, layers, masks, scenario, ring_m=200.0, ta
             continue
         if g.geom_type == "MultiPolygon":
             g = max(g.geoms, key=lambda p: p.area)
-        ring_xy = [[round(x, 6), round(y, 6)] for x, y in g.exterior.coords]
+        ring_xy = [[round(c[0], 6), round(c[1], 6)] for c in g.exterior.coords]
         rec = {"ring": ring_xy, "height": round(r["height"], 1)}
         p = r.geometry.representative_point()
         if frame.contains(p):

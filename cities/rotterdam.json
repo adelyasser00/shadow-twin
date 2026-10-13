@@ -133,5 +133,106 @@
   "hero_dir": 135.0,
   "story_dir": 247.5,
   "note": "hero: the clear December heat day (15 Dec, TMYx) blows from 130 to 150 deg in the window; story: south-west, the most frequent winter daytime sector (W, SW, S are 58% of hours)"
+ },
+ "viewer": {
+  "note": "build_viewer swaps the template's New York words for these (old, new) pairs",
+  "replace": [
+   [
+    "<title>Shadow twin: Central Park</title>",
+    "<title>Shadow twin: Zalmhaven, Rotterdam</title>"
+   ],
+   [
+    "content=\"Shadow twin: Central Park, Manhattan\"",
+    "content=\"Shadow twin: Zalmhaven, Rotterdam\""
+   ],
+   [
+    "Interactive 3D twin of Central Park: where the shadows fall hour by hour, and how much colder the park feels in winter since the new supertalls went up. From NYC's own LiDAR and building data.",
+    "Interactive 3D twin of Rotterdam's waterfront around Zalmhaven: where the shadows fall hour by hour, and how the streets feel since the new towers went up. From two Dutch national LiDAR surveys (AHN3, AHN5) and 3DBAG."
+   ],
+   [
+    "Shadows on Central Park hour by hour, and where the new towers make it feel colder. From public LiDAR. Open source.",
+    "Shadows around Zalmhaven hour by hour, and where the new towers change how the street feels. From public LiDAR. Open source."
+   ],
+   [
+    "Interactive shadow and felt-temperature study of Central Park from NYC LiDAR and building footprints, following the CEQR analysis method.",
+    "Interactive shadow and felt-temperature study of Rotterdam around Zalmhaven, from AHN LiDAR and 3DBAG, following the CEQR analysis method."
+   ],
+   [
+    "EST, CEQR window",
+    "CET, CEQR window"
+   ],
+   [
+    "} EST`",
+    "} CET`"
+   ],
+   [
+    "} EST, ${",
+    "} CET, ${"
+   ],
+   [
+    ", EST. Medians",
+    ", CET. Medians"
+   ],
+   [
+    "+ \" EST\"",
+    "+ \" CET\""
+   ],
+   [
+    "Compare 2017 vs today",
+    "Compare 2016 vs today"
+   ],
+   [
+    "Colder since 2017",
+    "Colder since 2016"
+   ],
+   [
+    "today minus 2017",
+    "today minus 2016"
+   ],
+   [
+    "grew since 2017",
+    "grew since 2016"
+   ],
+   [
+    "than in 2017",
+    "than in 2016"
+   ],
+   [
+    "Grown since 2017",
+    "Grown since 2016"
+   ],
+   [
+    "for 2017 and for today",
+    "for 2016 and for today"
+   ],
+   [
+    "The 2017 LiDAR surface was raised",
+    "The 2016 AHN3 surface was raised"
+   ],
+   [
+    "[\"2017.html\", \"shadow-twin-2017.html\"]",
+    "[\"2016.html\", \"shadow-twin-2016.html\"]"
+   ],
+   [
+    "isTodayBuild() ? \"2017\" : \"today\", w.season",
+    "isTodayBuild() ? \"2016\" : \"today\", w.season"
+   ],
+   [
+    "Central Park within 1.5 km of 59th Street, ground only ",
+    "Open ground of five neighbourhoods within 1 km of the towers that grew, "
+   ],
+   [
+    "Central Park within 1.5 km of 59th Street. Time-mean",
+    "Open ground within 1 km of the towers that grew. Time-mean"
+   ],
+   [
+    "<b>Central Park</b>",
+    "<b>Zalmhaven, Rotterdam</b>"
+   ],
+   [
+    "the Central Park typical year",
+    "the Rotterdam The Hague Airport typical year"
+   ]
+  ]
  }
 }
