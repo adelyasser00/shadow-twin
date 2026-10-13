@@ -58,6 +58,7 @@ GATES_JSON = os.path.join(VERIFY_DIR, "gates.json")
 V0_REACH_TOL = 0.05
 V1_AGREE_MIN = 0.98
 V1_AREA_TOL = 0.02
+V1T_AGREE_MIN = 0.99          # V1t, one cell of tolerance (NL_NOTES.md D21)
 V2_TMRT = (15.0, 35.0)
 V2_UTCI = (2.0, 10.0)
 # The ranges above were fixed before any result. The first run came out 1.6 C
@@ -227,6 +228,9 @@ def v1():
     win = masks["report"]
     bearing = -meta["grid"]["conv_deg"]
     import solweig as _sw
+    out_t = {"bar": V1T_AGREE_MIN, "area_bar": V1_AREA_TOL, "times": [],
+             "rule": "a cell agrees if the other model has its state within one cell (3 x 3), both ways"}
+    ok_t_all = True
     out = {"cells": int(ground.sum()), "conv_deg": meta["grid"]["conv_deg"], "times": [],
            "backend": _sw.get_compute_backend()}
     ok_all = True
@@ -250,8 +254,29 @@ def v1():
                              "sun_solar_py": [p.altitude, p.azimuth], "agreement": agree,
                              "agreement_window": agree_w, "shaded_ha_solweig": a_s * 4 / 1e4,
                              "shaded_ha_pipeline": a_p * 4 / 1e4, "area_diff": area, "pass": ok})
+        # V1t: the same maps with one cell of tolerance, both ways round
+        # (each code steps in whole cells, so each edge can sit half a cell off).
+        mx = lambda a: ndimage.maximum_filter(a, size=3)
+        tol = (np.where(s_sol, mx(s_pip), mx(~s_pip)) & np.where(s_pip, mx(s_sol), mx(~s_sol)))
+        agree_t = float(tol[ground].mean())
+        edge = ((mx(s_sol) != ~mx(~s_sol)) | (mx(s_pip) != ~mx(~s_pip)))
+        dis = (s_sol != s_pip) & ground
+        at_edge = float((dis & edge).sum() / max(dis.sum(), 1))
+        only_sol = float((s_sol & ~s_pip & ground).sum() * 4 / 1e4)
+        only_pip = float((s_pip & ~s_sol & ground).sum() * 4 / 1e4)
+        ok_t = agree_t >= V1T_AGREE_MIN and area <= V1_AREA_TOL
+        ok_t_all &= ok_t
+        line(ok_t, f"V1t {h:02d}:00 {CLOCK}  one cell of tolerance: agreement {agree_t*100:.2f}% "
+                   f"(bar {V1T_AGREE_MIN*100:.0f}%); {at_edge*100:.1f}% of the plain disagreement sits within "
+                   f"one cell of a shadow edge; shaded by SOLWEIG only {only_sol:.2f} ha, by ours only "
+                   f"{only_pip:.2f} ha")
+        out_t["times"].append({"est": f"{h:02d}:00", "agreement_tolerant": agree_t, "area_diff": area,
+                               "disagreement_at_edges": at_edge, "ha_solweig_only": only_sol,
+                               "ha_pipeline_only": only_pip, "pass": ok_t})
     out["pass"] = bool(ok_all)
     save_gate(gate, out)
+    out_t["pass"] = bool(ok_t_all)
+    save_gate(gate.replace("V1", "V1t"), out_t)
     return ok_all
 
 
