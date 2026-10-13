@@ -233,6 +233,14 @@
     "the Central Park typical year",
     "the Rotterdam The Hague Airport typical year"
    ]
-  ]
+  ],
+  "camera": {
+   "lat": 51.9135,
+   "lon": 4.48,
+   "heading": 15.0,
+   "back_m": 1600.0,
+   "height_m": 700.0,
+   "pitch": -30.0
+  }
  }
 }

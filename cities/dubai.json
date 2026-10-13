@@ -146,6 +146,14 @@
     "<b>Central Park</b>",
     "<b>Downtown Dubai</b>"
    ]
-  ]
+  ],
+  "camera": {
+   "lat": 25.1972,
+   "lon": 55.2744,
+   "heading": 20.0,
+   "back_m": 2400.0,
+   "height_m": 1300.0,
+   "pitch": -28.0
+  }
  }
 }
