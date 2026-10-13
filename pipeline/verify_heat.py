@@ -150,7 +150,12 @@ def v0():
         ok_all &= ok
 
     layers, masks, meta = H.load()
-    for nm, ok, det in H.check_invariants(layers, masks, abs(meta["_transform"].a)):
+    if _city.city_id() == "nyc":
+        checks = H.check_invariants(layers, masks, abs(meta["_transform"].a))
+    else:
+        from .city_inputs import check_invariants
+        checks = check_invariants(layers, masks, _city.scenarios(), abs(meta["_transform"].a))
+    for nm, ok, det in checks:
         ok_all &= line(ok, f"V0 input: {nm}  {det}")
         out["checks"].append({"check": nm, "pass": bool(ok), "detail": det})
     want_crs = _city.get("crs_geotiff", "EPSG:32118").split(":")[-1]
