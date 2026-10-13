@@ -311,7 +311,7 @@ class Solver:
 
     def __init__(self, solid, profile, veg=None, tau0=0.5005, smag=CS_SMAGORINSKY,
                  slip=True, z0_m=0.1, res_m=8.0, turbulence=None, device=None, log=print,
-                 facade_drag=False, sides=None):
+                 facade_drag=False, sides=None, fast_math=True):
         import pyopencl as cl
         h = host_arrays(solid, profile, veg, slip, z0_m, res_m, facade_drag, sides)
         solid, flag, prof, veg, sides = h["solid"], h["flag"], h["prof"], h["veg"], h["sides"]
@@ -336,7 +336,7 @@ class Solver:
                             idx=_csv(IDX),
                             cx=_csv(C[:, 0]), cy=_csv(C[:, 1]), cz=_csv(C[:, 2]),
                             w=_csv(W, "{:.9f}f"), opp=_csv(OPP), mz=_csv(MZ))
-        self.prg = cl.Program(self.ctx, src).build(options=["-cl-fast-relaxed-math"])
+        self.prg = cl.Program(self.ctx, src).build(options=["-cl-fast-relaxed-math"] if fast_math else [])
         self.k_step = cl.Kernel(self.prg, "step")
         self.fa = cl.Buffer(self.ctx, mf.READ_WRITE, lattice_bytes)
         self.fb = cl.Buffer(self.ctx, mf.READ_WRITE, lattice_bytes)
