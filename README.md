@@ -513,19 +513,26 @@ reproduces the stored runs' voxels exactly.
 
 ```
 .venv-heat/Scripts/python -I tools/get_city_data.py rotterdam
-set TWIN_CITY=rotterdam
+export TWIN_CITY=rotterdam
 .venv-heat/Scripts/python -m pipeline.city_inputs
 .venv-heat/Scripts/python -m pipeline.city_shade
+.venv-heat/Scripts/python -m pipeline.city_shade --verify
 .venv-heat/Scripts/python -m pipeline.city_shade --towers
+.venv-heat/Scripts/python -m pipeline.city_shade --tno
 .venv-heat/Scripts/python -m pipeline.heat_weather data/cities/rotterdam/heat/weather/<file>.epw
 .venv-heat/Scripts/python -m pipeline.run_heat --all --cpu
 .venv-heat/Scripts/python -m pipeline.verify_heat
 .venv-heat/Scripts/python -m pipeline.wind_domain
 .venv-heat/Scripts/python -m pipeline.run_wind --queue hero story grid
 .venv-heat/Scripts/python -m pipeline.wind_export
+.venv-heat/Scripts/python tools/city_wind_story.py
 .venv-heat/Scripts/python -m pipeline.build_viewer
 .venv-heat/Scripts/python tools/city_qa.py
 ```
+
+`city_shade --tno` is the Dutch sunlight test on walls (the "lichte
+TNO-norm": 2 hours of sun on 19 February), as a proxy per building: the
+sunniest wall's lower half, from New York's wall-sun code.
 
 ---
 
