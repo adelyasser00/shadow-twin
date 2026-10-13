@@ -6,10 +6,17 @@ One-way nesting: what enters the 2 m box at its inlet face is the 8 m run's
 time-mean wind on that plane, plus gusts the size of the 8 m run's resolved
 turbulence there. Inside, the city is voxelised from the same 2 m canvas at
 2 m, with the wall settings that passed the wind tunnel checks at 2 m (facade
-friction on). Sides periodic and lid free slip, as in the city runs.
+friction on). Sides periodic and lid free slip, as in the city runs, or
+with --sides parent the side faces held at the 8 m run's time-mean wind
+(one-way nesting on the sides too; New York's periodic box failed its
+blockage check, POST_NOTES A8).
 
     .venv-heat/Scripts/python -I tools/wind_nest.py run [--scenario 2017 today] [--dir 315] [--width 480]
     .venv-heat/Scripts/python -I tools/wind_nest.py score [--dir 315] [--width 480]
+    TWIN_CITY=rotterdam .venv-heat/Scripts/python -I tools/wind_nest.py run --dir 247.5 --sides parent --average 6
+
+Any city: the tower is the city's focus (cities/<id>.json), New York's is
+Central Park Tower.
 
 --width 400 is the blockage check (A8): the same pair in a narrower box.
 --average 6: flow-throughs averaged (default 3, as the city runs). The box is
@@ -34,18 +41,22 @@ import numpy as np
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
-from pipeline.run_wind import (ACC_EVERY, ALPHA, AVERAGE_HERO, INLET_SKIP, RUNS_DIR, SPINUP, Z0_M,  # noqa: E402
+from pipeline import city as _city  # noqa: E402
+from pipeline.run_wind import (ACC_EVERY, ALPHA, AVERAGE_HERO, HERO, INLET_SKIP, RUNS_DIR, SPINUP, Z0_M,  # noqa: E402
                                run_name as parent_name, street_layer)
 from pipeline.wind_domain import BOX, Box, load_canvas, voxelise  # noqa: E402
 from pipeline.wind_lbm import InflowTurbulence, Solver  # noqa: E402
 from tools.aij_case_d import KAPPA_UVW  # noqa: E402
 
-TOWER = "Central Park Tower"
-TOWER_LONLAT = (-73.98102, 40.76644)        # as in tools/wind_story.py
+NYC = _city.city_id() == "nyc"
+BEFORE = _city.before()
+TOWER = "Central Park Tower" if NYC else _city.get("focus.name")
+TOWER_LONLAT = (-73.98102, 40.76644) if NYC else tuple(_city.get("focus.lonlat"))   # NYC as in tools/wind_story.py
+CRS_M = _city.get("crs_geotiff", "EPSG:32118")
 RES = 2.0
 PARENT_RES = 8.0
 NEST = {"length_m": 600.0, "width_m": 480.0, "height_m": 600.0, "roi_from_inlet_m": 250.0}
-OUT = os.path.join(HERE, "data", "wind", "nest")
+OUT = os.path.join(_city.wind_dir(), "nest")       # data/wind/nest for New York
 CHECK_X_M = 40.0                # the nesting check: this far downstream of the inlet,
 CHECK_Z_M = (150.0, 450.0)      # at these heights above the box's lowest ground (A8)
 RING_M = (20.0, 80.0)           # street ring around the tower, as in tools/wind_story.py
@@ -53,7 +64,7 @@ RING_M = (20.0, 80.0)           # street ring around the tower, as in tools/wind
 
 def tower_xy():
     from pyproj import Transformer
-    tf = Transformer.from_crs("EPSG:4326", "EPSG:32118", always_xy=True).transform
+    tf = Transformer.from_crs("EPSG:4326", CRS_M, always_xy=True).transform
     return tf(*TOWER_LONLAT)
 
 
@@ -96,14 +107,16 @@ def nest_box(width):
     return dict(NEST, width_m=float(width))
 
 
-def nest_name(scenario, theta, facade=True, width=NEST["width_m"], average=AVERAGE_HERO):
+def nest_name(scenario, theta, facade=True, width=NEST["width_m"], average=AVERAGE_HERO, sides="periodic"):
     return (f"{scenario}_dec_{theta:05.1f}_{RES:g}m" + ("_fw" if facade else "")
             + ("" if width == NEST["width_m"] else f"_w{width:g}")
-            + ("" if average == AVERAGE_HERO else f"_avg{average:g}"))
+            + ("" if average == AVERAGE_HERO else f"_avg{average:g}")
+            + ("" if sides == "periodic" else "_sides"))
 
 
-def run_one(scenario, theta, facade=True, log=print, force=False, width=NEST["width_m"], average=AVERAGE_HERO):
-    out = os.path.join(OUT, nest_name(scenario, theta, facade, width, average))
+def run_one(scenario, theta, facade=True, log=print, force=False, width=NEST["width_m"], average=AVERAGE_HERO,
+            sides="periodic"):
+    out = os.path.join(OUT, nest_name(scenario, theta, facade, width, average, sides))
     if os.path.exists(os.path.join(out, "run.json")) and not force:
         log(f"  {os.path.basename(out)}: already done")
         return out
@@ -141,7 +154,19 @@ def run_one(scenario, theta, facade=True, log=print, force=False, width=NEST["wi
     log(f"  inlet from {parent_name(scenario, 'dec', theta, PARENT_RES)}: lid {prof[-1]:.4f}, "
         f"Iu {iu[gk + 5]:.2f} at {zabs[gk + 5] - gmin:.0f} m, {iu[nz // 2]:.2f} at {zabs[nz // 2] - gmin:.0f} m")
 
-    s = Solver(solid, prof, veg=veg, res_m=RES, z0_m=Z0_M, turbulence=turb, log=log, facade_drag=facade)
+    side_u = None
+    if sides == "parent":
+        # Both side faces held at the 8 m run's time-mean wind, all along the box.
+        side_u = np.zeros((3, nz, 2, nx), np.float32)
+        for q, j in enumerate((0, ny - 1)):
+            xs, ys = bx.to_map(np.arange(nx), np.full(nx, j))
+            Us, _, _ = parent_at(m, u, uu, pb, xs[None, :], ys[None, :], zabs[:, None])
+            side_u[:, :, q, :] = Us
+        side_u[:, :gk] = 0.0
+        log(f"  sides from the 8 m run: mean along-wind {float(side_u[0, gk:].mean()):.4f}, "
+            f"across {float(np.abs(side_u[1, gk:]).mean()):.4f} (lattice units)")
+    s = Solver(solid, prof, veg=veg, res_m=RES, z0_m=Z0_M, turbulence=turb, log=log, facade_drag=facade,
+               sides=side_u)
     ft = nx / float(prof[gk:].mean())
     n_spin = int(SPINUP * ft)
     n_avg = int(average * ft)
@@ -194,7 +219,8 @@ def run_one(scenario, theta, facade=True, log=print, force=False, width=NEST["wi
             "tower_xy": [float(tx), float(ty)], "parent": parent_name(scenario, "dec", theta, PARENT_RES),
             "smagorinsky": 0.17, "z0_m": Z0_M, "wall_cd": round(s.cd_wall, 5),
             "walls": "slip + wall-law drag" + (" on ground, roofs and facades" if facade else " on ground and roofs"),
-            "sides": "periodic", "lid": "free slip", "gusts_calibrated": turb.calibrated,
+            "sides": "periodic" if sides == "periodic" else "the 8 m run's time-mean wind",
+            "lid": "free slip", "gusts_calibrated": turb.calibrated,
             "flow_through_steps": round(ft), "spinup_steps": n_spin, "average_steps": n_avg,
             "samples": int(k_full), "average_flow_throughs": average, "accumulate_every": ACC_EVERY,
             "mlups": [round(x) for x in mlups],
@@ -218,7 +244,11 @@ def tower_ring():
     x, y, layers, masks, meta = heat_points()
     tx, ty = tower_xy()
     bld = masks["building"]
-    lab, _ = ndimage.label(bld)
+    if NYC or "labels" not in masks:
+        lab, _ = ndimage.label(bld)
+    else:
+        # The tower's own outline (BAG), as tools/city_wind_story.py rings it.
+        lab = masks["labels"]
     r = int(round((y[0, 0] - ty) / 2.0))
     c = int(round((tx - x[0, 0]) / 2.0))
     if not lab[r, c]:
@@ -228,12 +258,12 @@ def tower_ring():
     return x, y, ring
 
 
-def score(theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_HERO):
+def score(theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_HERO, sides="periodic"):
     from pipeline.wind_export import RunBox, resample
     x, y, ring = tower_ring()
     res = {}
-    for sc in ("2017", "today"):
-        d = os.path.join(OUT, nest_name(sc, theta, facade, width, average))
+    for sc in (BEFORE, "today"):
+        d = os.path.join(OUT, nest_name(sc, theta, facade, width, average, sides))
         with open(os.path.join(d, "run.json"), encoding="utf-8") as f:
             m = json.load(f)
         z = np.load(os.path.join(d, "street.npz"))
@@ -245,8 +275,8 @@ def score(theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_
                    "median_2m_next_cell_up": float(np.nanmedian(va)),
                    "n_2m": int(np.isfinite(v).sum()), "median_8m_x_lawn": float(np.nanmedian(k8)),
                    "nesting_check": m["nesting_check"], "convergence": m["convergence_street_speed"]}
-    a, b = res["2017"], res["today"]
-    out = {"tower": TOWER, "theta": theta, "width_m": width, "average_flow_throughs": average,
+    a, b = res[BEFORE], res["today"]
+    out = {"tower": TOWER, "theta": theta, "width_m": width, "average_flow_throughs": average, "sides": sides,
            "ring_m": RING_M, "ring_cells": int(ring.sum()),
            "runs": res,
            "change_pct_2m": round((b["median_2m"] / a["median_2m"] - 1) * 100, 1),
@@ -256,10 +286,11 @@ def score(theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_
                                                1),
            "generated": datetime.now().isoformat(timespec="seconds")}
     tag = (("" if width == NEST["width_m"] else f"_w{width:g}")
-           + ("" if average == AVERAGE_HERO else f"_avg{average:g}"))
+           + ("" if average == AVERAGE_HERO else f"_avg{average:g}")
+           + ("" if sides == "periodic" else "_sides"))
     with open(os.path.join(OUT, f"score_{theta:05.1f}{tag}.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(out, f, indent=1)
-    log(f"  {TOWER}, {theta:g} deg, {width:g} m wide box, {average:g} flow-throughs, street ring {RING_M[0]:g}-{RING_M[1]:g} m: change since 2017 "
+    log(f"  {TOWER}, {theta:g} deg, {width:g} m wide box, {average:g} flow-throughs, street ring {RING_M[0]:g}-{RING_M[1]:g} m, sides {sides}: change since {BEFORE} "
         f"{out['change_pct_2m']:+.1f}% at 2 m (windiest tenth {out['change_p90_pct_2m']:+.1f}%), "
         f"{out['change_pct_8m']:+.1f}% at 8 m; next cell up (2-4 m, does not decide) "
         f"{out['change_pct_2m_next_cell_up']:+.1f}%")
@@ -273,8 +304,10 @@ def score(theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("what", choices=("run", "score"))
-    ap.add_argument("--scenario", nargs="*", default=["2017", "today"])
-    ap.add_argument("--dir", type=float, default=315.0)
+    ap.add_argument("--scenario", nargs="*", default=[BEFORE, "today"])
+    ap.add_argument("--dir", type=float, default=HERO)
+    ap.add_argument("--sides", choices=("periodic", "parent"), default="periodic",
+                    help="parent: hold the side faces at the 8 m run's mean wind")
     ap.add_argument("--width", type=float, default=NEST["width_m"], help="box width, m (400: the blockage check)")
     ap.add_argument("--average", type=float, default=AVERAGE_HERO, help="flow-throughs averaged")
     ap.add_argument("--force", action="store_true")
@@ -286,8 +319,9 @@ def main():
 
     if args.what == "run":
         for sc in args.scenario:
-            run_one(sc, args.dir, log=log, force=args.force, width=args.width, average=args.average)
-    score(args.dir, log=log, width=args.width, average=args.average)
+            run_one(sc, args.dir, log=log, force=args.force, width=args.width, average=args.average,
+                    sides=args.sides)
+    score(args.dir, log=log, width=args.width, average=args.average, sides=args.sides)
     return 0
 
 
