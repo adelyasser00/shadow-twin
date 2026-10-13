@@ -119,7 +119,12 @@ result, not the absolute figure.
   30 minutes. CEQR assesses shadows on sunlight-sensitive resources such as
   parks. Street and wall figures are reported here because they matter for
   people on the ground, not because CEQR asks for them.
-- **Sun position:** NOAA solar position algorithm.
+- **Sun position:** NOAA solar position algorithm, with atmospheric
+  refraction since 13 Oct 2026 (NOAA's fit; shadows follow the sun as seen).
+  The figures on this page were made before it; rerun with it, none moves
+  by more than 0.2 points (December, 700 m frame: 46.6% -> 46.4% never in
+  sun in 2017). `TWIN_REFRACTION=0` reproduces them exactly. Sunrise and the
+  CEQR windows keep the standard -0.833 degree horizon.
 - **Surface:** highest LiDAR return per 2 m cell, ground from the lowest ground
   return. Cells more than 6 m from any return are one of two things. Water
   inside the survey (the Reservoir, the Lake, the Pond) returns nothing to the
