@@ -107,8 +107,26 @@ def main():
         lawn = report & ~canopy
         under = report & canopy
         kl, ku = float(np.nanmedian(kmap[lawn])), float(np.nanmedian(kmap[under]))
-        gates[f"W4_{name}"] = {"median_open_lawn": round(kl, 3), "median_under_canopy": round(ku, 3),
-                               "pass": ku < kl}
+        if _city.city_id() == "nyc":
+            gates[f"W4_{name}"] = {"median_open_lawn": round(kl, 3), "median_under_canopy": round(ku, 3),
+                                   "pass": ku < kl}
+        else:
+            # New York's window is a park, so W4 compares park lawns with park
+            # trees. A window of streets mixes that with street width: trees
+            # stand on the widest, windiest avenues. So the gate is taken in
+            # the reference park, as in New York, and the street comparison
+            # is kept as information. (Changed after the first Rotterdam run;
+            # see NL_NOTES.md D16.)
+            from pyproj import Transformer
+            from .wind_export import ANCHOR_RADIUS_M, CRS_M, SHEEP_MEADOW
+            px, py = Transformer.from_crs("EPSG:4326", CRS_M, always_xy=True).transform(*SHEEP_MEADOW)
+            near = (x - px) ** 2 + (y - py) ** 2 < ANCHOR_RADIUS_M ** 2
+            area = near & ~masks["building"] & ~masks["water"] & (masks["park"] | canopy)
+            pl, pu = float(np.nanmedian(kmap[area & ~canopy])), float(np.nanmedian(kmap[area & canopy]))
+            gates[f"W4_{name}"] = {"where": "reference park", "median_open_lawn": round(pl, 3),
+                                   "median_under_canopy": round(pu, 3), "pass": pu < pl,
+                                   "streets_open": round(kl, 3), "streets_under_canopy": round(ku, 3),
+                                   "streets_pass": ku < kl}
         fr = kmap[r0:r1, c0:c1]
         fr = fr[np.isfinite(fr)]
         p99 = float(np.percentile(fr, 99))
