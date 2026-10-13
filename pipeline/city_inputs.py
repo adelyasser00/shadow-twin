@@ -387,6 +387,26 @@ def build_survey_grown(cfg, log=print):
     hb = surf_b - ground
     ht = surf_t - ground
 
+    # Cranes. The newer survey caught building sites mid-construction, and a
+    # crane's mast and jib, a pixel or two wide, become 2 m cells at crane
+    # height when each cell takes its highest pixel (Blekerhof, 2023: 150 m in
+    # the cell maxima, a 90 m roof in 3DBAG's fit). Inside footprints the newer
+    # surface is opened (3 x 3 cells, removes anything under 6 m across), then
+    # capped at the footprint's 99th percentile of the cell-averaged survey
+    # plus 3 m, where a crane pixel counts one sixteenth.
+    if src["survey_today"].get("crane_filter", True):
+        dsm_tm = read_raster(src["survey_today"]["dsm"], grid, "mean",
+                             os.path.join(cdir, "dsm_today_mean.npy"), log)
+        opened = ndimage.grey_opening(surf_t, size=(3, 3))
+        cap_lab = label_stat(np.where(np.isfinite(dsm_tm), dsm_tm, surf_t) - ground, labels, n, 0.99) + 3.0
+        cap = np.where(fp, ground + np.nan_to_num(cap_lab[labels], nan=1e4), np.inf)
+        filt = np.where(fp, np.minimum(opened, cap), surf_t)
+        cut = fp & (surf_t - filt > 10.0)
+        log(f"  crane filter: {int(cut.sum()):,} footprint cells of the newer survey lowered by more "
+            f"than 10 m, in {len(np.unique(labels[cut]))} buildings")
+        surf_t = filt.astype(np.float32)
+        ht = surf_t - ground
+
     # ---- grown, New York's rule with measured roofs ----------------------
     top_b = label_stat(hb, labels, n, 0.99)
     top_t = label_stat(ht, labels, n, 0.99)

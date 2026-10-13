@@ -100,7 +100,7 @@ def run(scenario, log=print, viewer=True):
     fsl = grid.frame_slice
     surf = surface_for(layers, scenario)
     report = masks["report"][fsl]
-    blank = ~masks["window"][fsl] | masks["building"][fsl]
+    blank = ~masks["window"][fsl] | masks["building"][fsl] | masks["water"][fsl]
     lat, lon = meta["site"]["lat"], meta["site"]["lon"]
     utc = city.utc_offset()
     days = analysis_days(cfg, lat, lon)
@@ -225,21 +225,80 @@ def compare(log=print):
     return out
 
 
+def towers(min_m=70.0, day="dec", log=print):
+    """
+    Each tower that grew, added on its own to the older city: what it alone
+    takes from the open ground on one day. New York's tools/compare_heat.py
+    --towers does the same for felt temperature. Overlaps between towers
+    are not split, so the parts can add up to more than the whole.
+    """
+    from .heat_inputs import load
+    cfg = city.config()
+    layers, masks, meta = load()
+    grid = grid_from_meta(meta, masks)
+    fsl = grid.frame_slice
+    report = masks["report"][fsl]
+    before = surface_for(layers, city.before())
+    now = surface_for(layers, "today")
+    lab, raised = masks["labels"], masks["raised"]
+    lat, lon = meta["site"]["lat"], meta["site"]["lon"]
+    spec = next(d for d in analysis_days(cfg, lat, lon) if d["id"] == day)
+    fr = frames_for(spec, lat, lon, city.utc_offset(), STEP_MIN)
+    pos, lb = [p for p, _ in fr], [l for _, l in fr]
+    step_h = STEP_MIN / 60.0
+    base = run_day(before, grid.res_m, pos, lb, window=grid.frame, bearing_deg=grid.bearing_deg,
+                   compute_svf=False).sun_hours * step_h
+    from pyproj import Transformer
+    to_m = Transformer.from_crs("EPSG:4326", meta["grid"]["crs_build"], always_xy=True).transform
+    t = meta["_transform"]
+    out = []
+    ha = grid.res_m ** 2 / 1e4
+    for b in meta["grown_buildings"]:
+        if b["height_m"] < min_m:
+            continue
+        x, y = to_m(*b["lonlat"])
+        r, c = int((y - t.f) / t.e), int((x - t.c) / t.a)
+        i = int(lab[r, c])
+        cells = raised & (lab == i)
+        if not i or not cells.any():
+            continue
+        s = np.where(cells, now, before).astype(np.float32)
+        sun = run_day(s, grid.res_m, pos, lb, window=grid.frame, bearing_deg=grid.bearing_deg,
+                      compute_svf=False).sun_hours * step_h
+        lost = (base - sun)[report]
+        rec = {**b, "label": i, "day": day,
+               "ha_lost_any": round(float((lost >= 0.25).sum() * ha), 2),
+               "ha_lost_1h": round(float((lost >= 1.0).sum() * ha), 2),
+               "ha_lost_all": round(float(((base[report] >= NO_SUN_H) & (sun[report] < NO_SUN_H)).sum() * ha), 2)}
+        out.append(rec)
+        log(f"  {b['height_m']:6.1f} m, built {b['year']}, {b['lonlat'][1]:.5f}, {b['lonlat'][0]:.5f}: "
+            f"alone it takes sun from {rec['ha_lost_any']} ha, an hour or more from {rec['ha_lost_1h']} ha, "
+            f"all of it from {rec['ha_lost_all']} ha")
+    with open(os.path.join(shade_dir(), f"towers_{day}.json"), "w", encoding="utf-8", newline="\n") as f:
+        json.dump(out, f, indent=1)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--scenario", choices=list(city.scenarios()) + ["both"], default="both")
     ap.add_argument("--no-viewer", action="store_true")
+    ap.add_argument("--towers", action="store_true", help="each tower that grew, on its own, 21 December")
     args = ap.parse_args()
     t0 = time.time()
 
     def log(m):
         print(f"[{time.time() - t0:7.1f}s] {m}", flush=True)
 
+    if args.towers:
+        towers(log=log)
+        return 0
+
     scs = city.scenarios() if args.scenario == "both" else (args.scenario,)
     result = {"city": city.city_id(), "generated": time.strftime("%Y-%m-%dT%H:%M:%S"), "stats": {}}
     for sc in scs:
         result["stats"][sc] = run(sc, log=log, viewer=not args.no_viewer)[0]
-    if args.scenario == "both":
+    if args.scenario == "both" and len(city.scenarios()) == 2:
         log("change between the scenarios, open ground of the window:")
         result["change"] = compare(log=log)
     with open(os.path.join(shade_dir(), "shade.json"), "w", encoding="utf-8", newline="\n") as f:
