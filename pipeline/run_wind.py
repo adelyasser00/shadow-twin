@@ -72,7 +72,7 @@ def street_layer(arr, kfirst):
     return np.take_along_axis(arr, k, axis=1)[:, 0]
 
 
-def one(scenario, theta, res=8.0, season="dec", box=BOX, tag="", log=print, force=False,
+def one(scenario, theta, res=8.0, season="dec", box=BOX, tag="", log=print, force=False, roi_centre=None,
         average=AVERAGE, turbulence=True):
     out_dir = os.path.join(RUNS_DIR, run_name(scenario, season, theta, res, tag))
     done = os.path.join(out_dir, "run.json")
@@ -92,6 +92,8 @@ def one(scenario, theta, res=8.0, season="dec", box=BOX, tag="", log=print, forc
             f"old run moved to {keep}")
     t0 = time.time()
     canvas, info = load_canvas()
+    if roi_centre is not None:
+        info = dict(info, roi_centre=[float(roi_centre[0]), float(roi_centre[1])])
     solid, veg, cols, bx = voxelise(canvas, info, theta, res, scenario, season, box)
     nz = bx.nz
     gk = int(np.median(cols["kfirst"][:, 0]))          # ground layer at the inlet
@@ -197,6 +199,11 @@ def main():
     ap.add_argument("--season", default="dec", choices=("dec", "jun"))
     ap.add_argument("--queue", nargs="*", help="hero, today-nw, grid, today-rest, june, 2017-lib, or all")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--width", type=float, default=None, help="box width, m (default the city box)")
+    ap.add_argument("--centre-focus", action="store_true",
+                    help="centre the box on the city's focus tower instead of the study window")
+    ap.add_argument("--average", type=float, default=AVERAGE, help="flow-throughs averaged")
+    ap.add_argument("--tag", default="", help="suffix for the run's folder name")
     args = ap.parse_args()
     t0 = time.time()
 
@@ -207,9 +214,15 @@ def main():
     for q in args.queue or []:
         jobs += queue(q)
     if args.scenario:
-        jobs += [(args.scenario, d, args.res, BOX, "", args.season, AVERAGE) for d in (args.dir or [HERO])]
+        box = dict(BOX, width_m=args.width) if args.width else BOX
+        jobs += [(args.scenario, d, args.res, box, args.tag, args.season, args.average) for d in (args.dir or [HERO])]
+    roi = None
+    if args.centre_focus:
+        from pyproj import Transformer
+        roi = Transformer.from_crs("EPSG:4326", _city.get("crs_geotiff", "EPSG:32118"),
+                                   always_xy=True).transform(*_city.get("focus.lonlat"))
     for sc, d, res, box, tag, season, average in jobs:
-        one(sc, d, res, season, box, tag, log=log, force=args.force, average=average)
+        one(sc, d, res, season, box, tag, log=log, force=args.force, average=average, roi_centre=roi)
     log("done")
     return 0
 

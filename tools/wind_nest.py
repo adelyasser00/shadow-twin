@@ -43,9 +43,8 @@ sys.path.insert(0, HERE)
 
 from pipeline import city as _city  # noqa: E402
 from pipeline.run_wind import (ACC_EVERY, ALPHA, AVERAGE_HERO, HERO, INLET_SKIP, RUNS_DIR, SPINUP, Z0_M,  # noqa: E402
-                               run_name as parent_name, street_layer)
-from pipeline.wind_domain import BOX, Box, load_canvas, voxelise  # noqa: E402
-from pipeline.wind_lbm import InflowTurbulence, Solver  # noqa: E402
+                               run_name as parent_name)
+from pipeline.wind_domain import Box, load_canvas, voxelise  # noqa: E402
 from tools.aij_case_d import KAPPA_UVW  # noqa: E402
 
 NYC = _city.city_id() == "nyc"
@@ -68,8 +67,8 @@ def tower_xy():
     return tf(*TOWER_LONLAT)
 
 
-def load_parent(scenario, theta):
-    d = os.path.join(RUNS_DIR, parent_name(scenario, "dec", theta, PARENT_RES))
+def load_parent(scenario, theta, parent_tag=""):
+    d = os.path.join(RUNS_DIR, parent_name(scenario, "dec", theta, PARENT_RES, parent_tag))
     with open(os.path.join(d, "run.json"), encoding="utf-8") as f:
         m = json.load(f)
     z = np.load(os.path.join(d, "field.npz"))
@@ -77,6 +76,8 @@ def load_parent(scenario, theta):
 
 
 def parent_box(info, m):
+    # The 8 m run may be centred elsewhere than the canvas default (--centre-focus).
+    info = dict(info, roi_centre=list(m["box"]["p0"]))
     pb = Box(info, m["theta_from_deg"], PARENT_RES, m["box_size"])
     if not np.allclose(pb.p0, m["box"]["p0"]) or abs(pb.x0c - m["box"]["x0c"]) > 1e-9:
         raise SystemExit("the 8 m run's box does not match the canvas")
@@ -107,22 +108,20 @@ def nest_box(width):
     return dict(NEST, width_m=float(width))
 
 
-def nest_name(scenario, theta, facade=True, width=NEST["width_m"], average=AVERAGE_HERO, sides="periodic"):
+def nest_name(scenario, theta, facade=True, width=NEST["width_m"], average=AVERAGE_HERO, sides="periodic",
+              parent_tag=""):
     return (f"{scenario}_dec_{theta:05.1f}_{RES:g}m" + ("_fw" if facade else "")
             + ("" if width == NEST["width_m"] else f"_w{width:g}")
             + ("" if average == AVERAGE_HERO else f"_avg{average:g}")
-            + ("" if sides == "periodic" else "_sides"))
+            + ("" if sides == "periodic" else "_sides")
+            + (f"_p{parent_tag.strip('_')}" if parent_tag else ""))
 
 
-def run_one(scenario, theta, facade=True, log=print, force=False, width=NEST["width_m"], average=AVERAGE_HERO,
-            sides="periodic"):
-    out = os.path.join(OUT, nest_name(scenario, theta, facade, width, average, sides))
-    if os.path.exists(os.path.join(out, "run.json")) and not force:
-        log(f"  {os.path.basename(out)}: already done")
-        return out
-    t0 = time.time()
+def prepare(scenario, theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_HERO,
+            sides="periodic", parent_tag=""):
+    """Everything the solve needs, as one dict of arrays (pipeline/nest_solve.py), and the meta to save."""
     canvas, info = load_canvas()
-    m, u, uu = load_parent(scenario, theta)
+    m, u, uu = load_parent(scenario, theta, parent_tag)
     pb = parent_box(info, m)
     tx, ty = tower_xy()
     info_c = dict(info, roi_centre=[float(tx), float(ty)])
@@ -145,13 +144,8 @@ def run_one(scenario, theta, facade=True, log=print, force=False, width=NEST["wi
             kl[k] = k_res[k][open_in[k]].mean()
     gk = int(np.median(cols["kfirst"][:, 0]))
     iu = np.where(prof > 1e-4, np.sqrt(kl / KAPPA_UVW) / np.maximum(prof, 1e-4), 0.0)
-    turb = InflowTurbulence(prof, gk, RES, ny, iu=iu)
-    f = turb.field                                   # (3, slices, nz, ny)
-    f *= fluid[None, None].astype(np.float32)        # no gusts inside the 8 m run's buildings
-    f[0] += (U[0] - prof[:, None]).astype(np.float32)[None]
-    f[1] += U[1].astype(np.float32)[None]
-    f[2] += U[2].astype(np.float32)[None]
-    log(f"  inlet from {parent_name(scenario, 'dec', theta, PARENT_RES)}: lid {prof[-1]:.4f}, "
+    pname = parent_name(scenario, "dec", theta, PARENT_RES, parent_tag)
+    log(f"  inlet from {pname}: lid {prof[-1]:.4f}, "
         f"Iu {iu[gk + 5]:.2f} at {zabs[gk + 5] - gmin:.0f} m, {iu[nz // 2]:.2f} at {zabs[nz // 2] - gmin:.0f} m")
 
     side_u = None
@@ -165,76 +159,71 @@ def run_one(scenario, theta, facade=True, log=print, force=False, width=NEST["wi
         side_u[:, :gk] = 0.0
         log(f"  sides from the 8 m run: mean along-wind {float(side_u[0, gk:].mean()):.4f}, "
             f"across {float(np.abs(side_u[1, gk:]).mean()):.4f} (lattice units)")
-    s = Solver(solid, prof, veg=veg, res_m=RES, z0_m=Z0_M, turbulence=turb, log=log, facade_drag=facade,
-               sides=side_u)
-    ft = nx / float(prof[gk:].mean())
-    n_spin = int(SPINUP * ft)
-    n_avg = int(average * ft)
-    n_avg -= n_avg % (2 * ACC_EVERY)
-    log(f"  {os.path.basename(out)}: flow-through {ft:,.0f} steps; {n_spin:,} to settle, {n_avg:,} averaged")
-    mlups = [s.run(n_spin, log_every=max(1, n_spin // 2))]
-    if not np.isfinite(s.max_speed()):
-        raise SystemExit("the solver blew up while settling")
-    mlups.append(s.run(n_avg // 2, accumulate_every=ACC_EVERY))
-    half, k_half = s.sums()
-    half = half.copy()
-    mlups.append(s.run(n_avg // 2, accumulate_every=ACC_EVERY))
-    full, k_full = s.sums()
-    if not np.isfinite(full).all():
-        raise SystemExit("the solver blew up while averaging")
-    kf = cols["kfirst"]
-    mean = full / k_full
-    sp1 = street_layer((half / k_half)[4:5], kf)[0]
-    sp2 = street_layer(((full - half) / (k_full - k_half))[4:5], kf)[0]
-    ground_cols = ~cols["roof"]
-    ground_cols[:, :INLET_SKIP] = False
-    ground_cols[:, -INLET_SKIP:] = False
-    d = np.abs(sp1 - sp2)[ground_cols]
-    typical = float(np.median((sp1 + sp2)[ground_cols] / 2))
-    conv = {"median_abs_diff_over_median_speed": round(float(np.median(d)) / typical, 4),
-            "p90_abs_diff_over_median_speed": round(float(np.percentile(d, 90)) / typical, 4)}
 
-    # The nesting check: the 2 m box against the 8 m run on one plane, well above the street.
+    # The nesting-check plane, from the 8 m run (the 2 m side comes after the solve).
     ic = int(round(CHECK_X_M / RES))
     kz = np.nonzero((zabs - gmin >= CHECK_Z_M[0]) & (zabs - gmin <= CHECK_Z_M[1]))[0]
     xc, yc = bx.to_map(np.full(ny, ic), np.arange(ny))
     Up, _, flp = parent_at(m, u, uu, pb, xc[None, :], yc[None, :], zabs[kz][:, None])
-    child = np.sqrt((mean[:3, :, :, ic][:, kz] ** 2).sum(axis=0))      # (len(kz), ny)
-    par = np.sqrt((Up ** 2).sum(axis=0))
-    ok = (~solid[kz, :, ic]) & (flp > 0.999) & (par > 1e-4)
-    nest_err = float(np.median(np.abs(child[ok] / par[ok] - 1)))
-    nest_bias = float(np.median(child[ok] / par[ok] - 1))
-
-    street = street_layer(mean, kf)
-    above = street_layer(mean[4:5], np.minimum(kf + 1, nz - 1))[0]     # the next cell up, 2 to 4 m
-    os.makedirs(out, exist_ok=True)
-    np.savez_compressed(os.path.join(out, "street.npz"), street_speed=street[4].astype(np.float32),
-                        street_speed_above=above.astype(np.float32),
-                        street_u=street[:3].astype(np.float32), kfirst=kf, roof=cols["roof"],
-                        building=cols["building"].astype(np.float32), ground=cols["ground"].astype(np.float32),
-                        u_low=mean[:3, :41].astype(np.float16), profile=prof, iu=iu.astype(np.float32),
-                        check_child=child.astype(np.float32), check_parent=par.astype(np.float32), check_ok=ok)
+    pack = {"solid": solid, "veg": veg, "prof": prof, "iu": iu, "gk": gk,
+            "U_in": U, "fluid_in": fluid, "side_u": side_u,
+            "kfirst": cols["kfirst"], "roof": cols["roof"], "ic": ic, "kz": kz,
+            "check_parent": np.sqrt((Up ** 2).sum(axis=0)).astype(np.float32),
+            "check_fluid": flp.astype(np.float32),
+            "res_m": RES, "z0_m": Z0_M, "facade": bool(facade), "spinup": SPINUP, "average": float(average),
+            "accumulate_every": ACC_EVERY, "inlet_skip": INLET_SKIP, "seed": 11}
     meta = {"scenario": scenario, "season": "dec", "theta_from_deg": float(theta), "res_m": RES,
             "box": bx.meta(), "box_size": box, "gmin_m": gmin, "ground_layer": gk, "tower": TOWER,
-            "tower_xy": [float(tx), float(ty)], "parent": parent_name(scenario, "dec", theta, PARENT_RES),
-            "smagorinsky": 0.17, "z0_m": Z0_M, "wall_cd": round(s.cd_wall, 5),
+            "tower_xy": [float(tx), float(ty)], "parent": pname,
+            "smagorinsky": 0.17, "z0_m": Z0_M,
             "walls": "slip + wall-law drag" + (" on ground, roofs and facades" if facade else " on ground and roofs"),
             "sides": "periodic" if sides == "periodic" else "the 8 m run's time-mean wind",
-            "lid": "free slip", "gusts_calibrated": turb.calibrated,
-            "flow_through_steps": round(ft), "spinup_steps": n_spin, "average_steps": n_avg,
-            "samples": int(k_full), "average_flow_throughs": average, "accumulate_every": ACC_EVERY,
-            "mlups": [round(x) for x in mlups],
-            "device": s.device_name, "convergence_street_speed": conv,
-            "nesting_check": {"x_from_inlet_m": CHECK_X_M, "z_m": CHECK_Z_M, "n": int(ok.sum()),
-                              "median_abs_rel_diff": round(nest_err, 4), "median_rel_diff": round(nest_bias, 4)},
-            "wall_s": round(time.time() - t0), "generated": datetime.now().isoformat(timespec="seconds")}
+            "lid": "free slip", "average_flow_throughs": average, "accumulate_every": ACC_EVERY}
+    extra = {"building": cols["building"].astype(np.float32), "ground": cols["ground"].astype(np.float32)}
+    return pack, meta, extra
+
+
+def finish(out, pack, meta, extra, res, t0, log=print):
+    """Write street.npz and run.json exactly as the original run_one did."""
+    os.makedirs(out, exist_ok=True)
+    np.savez_compressed(os.path.join(out, "street.npz"), street_speed=res["street_speed"],
+                        street_speed_above=res["street_speed_above"],
+                        street_u=res["street_u"], kfirst=pack["kfirst"], roof=pack["roof"],
+                        building=extra["building"], ground=extra["ground"],
+                        u_low=res["u_low"], profile=pack["prof"], iu=np.asarray(pack["iu"], np.float32),
+                        check_child=res["check_child"], check_parent=res["check_parent"], check_ok=res["check_ok"])
+    r = res["meta"]
+    meta = dict(meta)
+    meta.update({"wall_cd": r["wall_drag"], "gusts_calibrated": r["gusts_calibrated"],
+                 "flow_through_steps": r["flow_through_steps"], "spinup_steps": r["spinup_steps"],
+                 "average_steps": r["average_steps"], "samples": r["samples"], "mlups": r["mlups"],
+                 "device": r["device"], "backend": r.get("backend"),
+                 "convergence_street_speed": r["convergence_street_speed"],
+                 "nesting_check": {"x_from_inlet_m": CHECK_X_M, "z_m": CHECK_Z_M, "n": int(res["check_ok"].sum()),
+                                   "median_abs_rel_diff": round(r["nest_err"], 4),
+                                   "median_rel_diff": round(r["nest_bias"], 4)},
+                 "wall_s": round(time.time() - t0), "generated": datetime.now().isoformat(timespec="seconds")})
     with open(os.path.join(out, "run.json"), "w", encoding="utf-8", newline="\n") as fh:
         json.dump(meta, fh, indent=1)
-    log(f"  {os.path.basename(out)}: done in {meta['wall_s']} s at {np.mean(mlups):.0f} MLUPs; street halves differ "
-        f"by {conv['median_abs_diff_over_median_speed'] * 100:.1f}%; 2 m vs 8 m on the check plane: "
-        f"median |diff| {nest_err * 100:.1f}%, median diff {nest_bias * 100:+.1f}%")
-    del s
+    conv = r["convergence_street_speed"]
+    log(f"  {os.path.basename(out)}: done in {meta['wall_s']} s at {np.mean(r['mlups']):.0f} MLUPs; street halves "
+        f"differ by {conv['median_abs_diff_over_median_speed'] * 100:.1f}%; 2 m vs 8 m on the check plane: "
+        f"median |diff| {r['nest_err'] * 100:.1f}%, median diff {r['nest_bias'] * 100:+.1f}%")
     return out
+
+
+def run_one(scenario, theta, facade=True, log=print, force=False, width=NEST["width_m"], average=AVERAGE_HERO,
+            sides="periodic", parent_tag="", backend="opencl"):
+    from pipeline.nest_solve import solve
+    out = os.path.join(OUT, nest_name(scenario, theta, facade, width, average, sides, parent_tag))
+    if os.path.exists(os.path.join(out, "run.json")) and not force:
+        log(f"  {os.path.basename(out)}: already done")
+        return out
+    t0 = time.time()
+    pack, meta, extra = prepare(scenario, theta, facade, log, width, average, sides, parent_tag)
+    log(f"  {os.path.basename(out)}: solving")
+    res = solve(pack, log=log, backend=backend)
+    return finish(out, pack, meta, extra, res, t0, log=log)
 
 
 def tower_ring():
@@ -258,25 +247,41 @@ def tower_ring():
     return x, y, ring
 
 
-def score(theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_HERO, sides="periodic"):
+def parent_ring_speed(sc, theta, parent_tag, x, y, ring):
+    """The 8 m run's street speed on the ring: k_heatgrid if wind_export made one, else resampled here."""
+    from pipeline.wind_export import RunBox, load_run, resample
+    d = os.path.join(RUNS_DIR, parent_name(sc, "dec", theta, PARENT_RES, parent_tag))
+    k = os.path.join(d, "k_heatgrid.npy")
+    if os.path.exists(k):
+        return np.load(k)[ring]
+    with open(os.path.join(d, "run.json"), encoding="utf-8") as f:
+        m = json.load(f)
+    m["_dir"] = d
+    run = load_run(m)
+    return resample(run["street_speed"], run["ok"], RunBox(m), x[ring], y[ring])
+
+
+def score(theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_HERO, sides="periodic",
+          parent_tag=""):
     from pipeline.wind_export import RunBox, resample
     x, y, ring = tower_ring()
     res = {}
     for sc in (BEFORE, "today"):
-        d = os.path.join(OUT, nest_name(sc, theta, facade, width, average, sides))
+        d = os.path.join(OUT, nest_name(sc, theta, facade, width, average, sides, parent_tag))
         with open(os.path.join(d, "run.json"), encoding="utf-8") as f:
             m = json.load(f)
         z = np.load(os.path.join(d, "street.npz"))
         ok = (~z["roof"]) & np.isfinite(z["street_speed"])
         v = resample(z["street_speed"], ok, RunBox(m), x[ring], y[ring])
         va = resample(z["street_speed_above"], ok, RunBox(m), x[ring], y[ring])
-        k8 = np.load(os.path.join(RUNS_DIR, parent_name(sc, "dec", theta, PARENT_RES), "k_heatgrid.npy"))[ring]
+        k8 = parent_ring_speed(sc, theta, parent_tag, x, y, ring)
         res[sc] = {"median_2m": float(np.nanmedian(v)), "p90_2m": float(np.nanpercentile(v, 90)),
                    "median_2m_next_cell_up": float(np.nanmedian(va)),
                    "n_2m": int(np.isfinite(v).sum()), "median_8m_x_lawn": float(np.nanmedian(k8)),
                    "nesting_check": m["nesting_check"], "convergence": m["convergence_street_speed"]}
     a, b = res[BEFORE], res["today"]
     out = {"tower": TOWER, "theta": theta, "width_m": width, "average_flow_throughs": average, "sides": sides,
+           "parent": parent_name(BEFORE, "dec", theta, PARENT_RES, parent_tag),
            "ring_m": RING_M, "ring_cells": int(ring.sum()),
            "runs": res,
            "change_pct_2m": round((b["median_2m"] / a["median_2m"] - 1) * 100, 1),
@@ -287,7 +292,8 @@ def score(theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_
            "generated": datetime.now().isoformat(timespec="seconds")}
     tag = (("" if width == NEST["width_m"] else f"_w{width:g}")
            + ("" if average == AVERAGE_HERO else f"_avg{average:g}")
-           + ("" if sides == "periodic" else "_sides"))
+           + ("" if sides == "periodic" else "_sides")
+           + (f"_p{parent_tag.strip('_')}" if parent_tag else ""))
     with open(os.path.join(OUT, f"score_{theta:05.1f}{tag}.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(out, f, indent=1)
     log(f"  {TOWER}, {theta:g} deg, {width:g} m wide box, {average:g} flow-throughs, street ring {RING_M[0]:g}-{RING_M[1]:g} m, sides {sides}: change since {BEFORE} "
@@ -308,6 +314,8 @@ def main():
     ap.add_argument("--dir", type=float, default=HERO)
     ap.add_argument("--sides", choices=("periodic", "parent"), default="periodic",
                     help="parent: hold the side faces at the 8 m run's mean wind")
+    ap.add_argument("--parent-tag", default="", help="the 8 m runs' folder suffix, e.g. _zh (run_wind --tag)")
+    ap.add_argument("--backend", default="opencl", choices=("opencl", "cuda", "auto"))
     ap.add_argument("--width", type=float, default=NEST["width_m"], help="box width, m (400: the blockage check)")
     ap.add_argument("--average", type=float, default=AVERAGE_HERO, help="flow-throughs averaged")
     ap.add_argument("--force", action="store_true")
@@ -320,8 +328,8 @@ def main():
     if args.what == "run":
         for sc in args.scenario:
             run_one(sc, args.dir, log=log, force=args.force, width=args.width, average=args.average,
-                    sides=args.sides)
-    score(args.dir, log=log, width=args.width, average=args.average, sides=args.sides)
+                    sides=args.sides, parent_tag=args.parent_tag, backend=args.backend)
+    score(args.dir, log=log, width=args.width, average=args.average, sides=args.sides, parent_tag=args.parent_tag)
     return 0
 
 

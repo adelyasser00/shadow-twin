@@ -255,6 +255,50 @@ def _csv(a, fmt="{}"):
     return ", ".join(fmt.format(v) for v in a)
 
 
+def host_arrays(solid, profile, veg, slip, z0_m, res_m, facade_drag, sides):
+    """Flags, inlet profile and drag per cell on the host: shared by the OpenCL and CUDA solvers."""
+    solid = np.ascontiguousarray(solid, dtype=bool)
+    nz, ny, nx = solid.shape
+    if not solid[0].all():
+        raise ValueError("the bottom layer must be solid ground")
+    flag = np.where(solid, SOLID, FLUID).astype(np.uint8)
+    flag[1:, :, 0][~solid[1:, :, 0]] = INLET
+    flag[1:, :, -1][~solid[1:, :, -1]] = OUTLET
+    if sides is not None:
+        sides = np.ascontiguousarray(sides, np.float32)
+        if sides.shape != (3, nz, 2, nx):
+            raise ValueError("sides must be (3, nz, 2, nx)")
+        for j in (0, ny - 1):
+            open_ = ~solid[1:, j, 1:-1]
+            flag[1:, j, 1:-1][open_] = SIDE
+    prof = np.asarray(profile, np.float32)
+    if prof.shape != (nz,):
+        raise ValueError("profile must have one speed per layer")
+    if veg is None:
+        veg = np.zeros(solid.shape, np.float32)
+    veg = np.asarray(veg, np.float32).copy()
+    cd_wall = 0.0
+    if slip:
+        # Wall-law drag in the first open cell above ground and roofs.
+        cd_wall = wall_drag(z0_m, res_m)
+        above = np.zeros_like(solid)
+        above[1:] = solid[:-1] & ~solid[1:]
+        veg[above] += cd_wall
+        if facade_drag:
+            # The same wall law beside facades: once per solid side face
+            # (x is open at the inlet and outlet, y is periodic).
+            faces = np.zeros(solid.shape, np.float32)
+            faces[:, :, 1:] += solid[:, :, :-1]
+            faces[:, :, :-1] += solid[:, :, 1:]
+            faces += np.roll(solid, 1, axis=1)
+            faces += np.roll(solid, -1, axis=1)
+            veg += cd_wall * faces
+    veg = np.where(solid, 0.0, veg).astype(np.float32)
+    return {"solid": solid, "flag": flag, "prof": prof, "veg": veg, "sides": sides,
+            "shape": (nz, ny, nx), "n": nx * ny * nz, "cd_wall": cd_wall,
+            "facade_drag": bool(slip and facade_drag)}
+
+
 class Solver:
     """
     solid    bool (nz, ny, nx); z = 0 must be solid everywhere (the ground)
@@ -269,48 +313,14 @@ class Solver:
                  slip=True, z0_m=0.1, res_m=8.0, turbulence=None, device=None, log=print,
                  facade_drag=False, sides=None):
         import pyopencl as cl
-        solid = np.ascontiguousarray(solid, dtype=bool)
-        nz, ny, nx = solid.shape
-        if not solid[0].all():
-            raise ValueError("the bottom layer must be solid ground")
-        self.shape = (nz, ny, nx)
-        self.n = n = nx * ny * nz
+        h = host_arrays(solid, profile, veg, slip, z0_m, res_m, facade_drag, sides)
+        solid, flag, prof, veg, sides = h["solid"], h["flag"], h["prof"], h["veg"], h["sides"]
+        nz, ny, nx = self.shape = h["shape"]
+        self.n = n = h["n"]
         self.log = log
-        flag = np.where(solid, SOLID, FLUID).astype(np.uint8)
-        flag[1:, :, 0][~solid[1:, :, 0]] = INLET
-        flag[1:, :, -1][~solid[1:, :, -1]] = OUTLET
-        if sides is not None:
-            sides = np.ascontiguousarray(sides, np.float32)
-            if sides.shape != (3, nz, 2, nx):
-                raise ValueError("sides must be (3, nz, 2, nx)")
-            for j in (0, ny - 1):
-                open_ = ~solid[1:, j, 1:-1]
-                flag[1:, j, 1:-1][open_] = SIDE
         self.flag = flag
-        prof = np.asarray(profile, np.float32)
-        if prof.shape != (nz,):
-            raise ValueError("profile must have one speed per layer")
-        if veg is None:
-            veg = np.zeros(solid.shape, np.float32)
-        veg = np.asarray(veg, np.float32).copy()
-        self.cd_wall = 0.0
-        if slip:
-            # Wall-law drag in the first open cell above ground and roofs.
-            self.cd_wall = wall_drag(z0_m, res_m)
-            above = np.zeros_like(solid)
-            above[1:] = solid[:-1] & ~solid[1:]
-            veg[above] += self.cd_wall
-            if facade_drag:
-                # The same wall law beside facades: once per solid side face
-                # (x is open at the inlet and outlet, y is periodic).
-                faces = np.zeros(solid.shape, np.float32)
-                faces[:, :, 1:] += solid[:, :, :-1]
-                faces[:, :, :-1] += solid[:, :, 1:]
-                faces += np.roll(solid, 1, axis=1)
-                faces += np.roll(solid, -1, axis=1)
-                veg += self.cd_wall * faces
-        self.facade_drag = bool(slip and facade_drag)
-        veg = np.where(solid, 0.0, veg).astype(np.float32)
+        self.cd_wall = h["cd_wall"]
+        self.facade_drag = h["facade_drag"]
 
         self.ctx = cl.Context([device or pick_device()])
         self.queue = cl.CommandQueue(self.ctx)
