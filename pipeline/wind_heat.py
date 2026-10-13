@@ -46,12 +46,19 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
+from . import city as _city
 from .wind_domain import WIND_DIR
 from .wind_export import OUT_DIR, runs_available
+
+NYC = _city.city_id() == "nyc"
+BEFORE = _city.before()
+UTC = _city.utc_offset()
 
 UTCI_WIND_MIN, UTCI_WIND_MAX = 0.5, 17.0
 SMOOTH_CELLS = 10                 # 20 m on the 2 m heat grid
 QUIET_FROM_M = 1000.0             # park this far north of 59th Street: no tower changed near it
+# Elsewhere: open ground this far from any cell that changed between the years.
+QUIET_FROM_CHANGED_M = float(_city.get("wind.quiet_from_changed_m", 300.0))
 NOISE_SIGMAS = 3.0
 CELL_HA = 4.0 / 1e4
 NUMBERS_CSV = os.path.join(WIND_DIR, "wind_numbers.csv")
@@ -99,7 +106,10 @@ def smoothed(k):
 
 def reconcile(k17, know, masks):
     """Keep only wind differences above the noise; elsewhere both years get the mean."""
-    quiet = masks["report"] & (masks["dist59"] >= QUIET_FROM_M)
+    if NYC:
+        quiet = masks["report"] & (masks["dist59"] >= QUIET_FROM_M)
+    else:
+        quiet = masks["report"] & (masks["dist_changed"] >= QUIET_FROM_CHANGED_M)
     r = know / np.maximum(k17, 0.02) - 1.0
     rq = r[quiet & np.isfinite(r)]
     noise = float(np.std(rq)) if rq.size else 0.0
@@ -170,16 +180,17 @@ def main():
             per = {}
             ks = {}
             for sc in ("2017", "today"):
-                m = nearest_run(runs, sc, season, wd)
+                m = nearest_run(runs, BEFORE if sc == "2017" else sc, season, wd)
                 if m is not None:
                     ks[sc] = smoothed(np.load(os.path.join(m["_dir"], "k_heatgrid.npy")))
             if len(ks) == 2:
                 ks["2017"], ks["today"], noise = reconcile(ks["2017"], ks["today"], masks)
                 out["wind_noise_pct"] = round(noise * 100, 1)
             for sc in ("2017", "today"):
-                m = nearest_run(runs, sc, season, wd)
-                tmrt = read_step(sc, season, "tmrt", ts)
-                saved = read_step(sc, season, "utci", ts)
+                run_sc = BEFORE if sc == "2017" else sc
+                m = nearest_run(runs, run_sc, season, wd)
+                tmrt = read_step(run_sc, season, "tmrt", ts)
+                saved = read_step(run_sc, season, "utci", ts)
                 uni = utci(w.ta, w.rh, tmrt, np.full(tmrt.shape, max(ws_raw, UTCI_WIND_MIN), np.float32))
                 ok = np.isfinite(saved) & np.isfinite(uni) & report
                 w0.append(float(np.median(np.abs(uni[ok] - saved[ok]))))
@@ -207,7 +218,7 @@ def main():
             }
             any5_w |= d_wind[r] <= -5
             any5_u |= d_uni[r] <= -5
-            p = sun_position((st + timedelta(hours=5)).replace(tzinfo=timezone.utc), lat, lon)
+            p = sun_position((st - timedelta(hours=UTC)).replace(tzinfo=timezone.utc), lat, lon)
             out.update({
                 "sun": {"alt": round(p.altitude, 2), "az": round(p.azimuth, 2)},
                 "img": img, "run_dir": {"2017": a["dir"], "today": b["dir"]},

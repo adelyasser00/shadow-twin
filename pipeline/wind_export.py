@@ -49,13 +49,21 @@ from datetime import datetime
 
 import numpy as np
 
+from . import city as _city
 from .wind_domain import WIND_DIR, load_canvas
 from .run_wind import RUNS_DIR, run_name
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT_DIR = os.path.join(HERE, "viewer", "wind")
+OUT_DIR = os.path.join(_city.viewer_dir(), "wind")      # viewer/wind for New York
+NYC = _city.city_id() == "nyc"
+BEFORE = _city.before()
+CRS_M = _city.get("crs_geotiff", "EPSG:32118")
 
-SHEEP_MEADOW = (-73.9752, 40.7718)      # lon, lat, approximate centre of the lawn
+# The anchor spot: Sheep Meadow in New York, the city's reference spot elsewhere.
+SHEEP_MEADOW = tuple(_city.get("wind.reference.spot_lonlat", [-73.9752, 40.7718]))
+# Outside New York the anchor is the open lawns of one park, those within this
+# distance of the spot; New York's is every open lawn of the study window.
+ANCHOR_RADIUS_M = float(_city.get("wind.reference.radius_m", 400.0))
 REF_RADIUS_M = 40.0
 STREET_UP_M = 2.5
 VERTEX_CELLS = 1.5                      # vertex spacing at the Sheep Meadow speed, in cells
@@ -178,7 +186,7 @@ def sheep_meadow(layers, masks, meta, x, y):
     """The most open spot of the lawn near SHEEP_MEADOW: (x, y) in EPSG:32118 and a disc mask."""
     from pyproj import Transformer
     from scipy import ndimage
-    tf = Transformer.from_crs("EPSG:4326", "EPSG:32118", always_xy=True).transform
+    tf = Transformer.from_crs("EPSG:4326", CRS_M, always_xy=True).transform
     sx, sy = tf(*SHEEP_MEADOW)
     lawn = masks["park"] & ~masks["building"] & ~masks["water"] & (layers["cdsm"] < 2.0)
     dist = ndimage.distance_transform_edt(lawn) * 2.0
@@ -192,7 +200,14 @@ def sheep_meadow(layers, masks, meta, x, y):
 
 def open_lawn(layers, masks):
     """Reported park ground with no canopy: the anchor of every ratio."""
-    return masks["report"] & ~masks["building"] & ~masks["water"] & (layers["cdsm"] < 2.0)
+    if NYC:
+        return masks["report"] & ~masks["building"] & ~masks["water"] & (layers["cdsm"] < 2.0)
+    # A city whose study window is streets: the open lawns of the reference park.
+    from pyproj import Transformer
+    x, y, _, _, _ = heat_points()
+    sx, sy = Transformer.from_crs("EPSG:4326", CRS_M, always_xy=True).transform(*SHEEP_MEADOW)
+    near = (x - sx) ** 2 + (y - sy) ** 2 < ANCHOR_RADIUS_M ** 2
+    return near & masks["park"] & ~masks["building"] & ~masks["water"] & (layers["cdsm"] < 2.0)
 
 
 def lawn_reference(run, x, y, lawn):
@@ -381,7 +396,7 @@ def to_enu(run, ij, k=None, ground_m=None, origin=None):
     from pyproj import Transformer
     b = run["box"]
     x, y = b.to_map(ij[:, 0], ij[:, 1])
-    lon, lat = Transformer.from_crs("EPSG:32118", "EPSG:4326", always_xy=True).transform(x, y)
+    lon, lat = Transformer.from_crs(CRS_M, "EPSG:4326", always_xy=True).transform(x, y)
     if k is None:
         up = np.full(len(x), STREET_UP_M)
     else:
@@ -434,7 +449,7 @@ def main():
     rng = np.random.default_rng(7)
     refs = {}
     entries = []
-    for m in sorted(runs, key=lambda m: (m["scenario"] != "2017", m["theta_from_deg"])):
+    for m in sorted(runs, key=lambda m: (m["scenario"] != BEFORE, m["theta_from_deg"])):
         run = load_run(m)
         key = (m["season"], m["theta_from_deg"], m["res_m"], m["_name"].split("m", 1)[-1] if False else "")
         ref = lawn_reference(run, x, y, lawn)
@@ -443,7 +458,7 @@ def main():
         entries.append((m, run, ref))
     out_runs = []
     for m, run, ref in entries:
-        r17 = refs.get(("2017", m["season"], m["theta_from_deg"], m["res_m"], m["_name"].endswith("_small")), ref)
+        r17 = refs.get((BEFORE, m["season"], m["theta_from_deg"], m["res_m"], m["_name"].endswith("_small")), ref)
         b = run["box"]
         # Street map on the heat grid: ratio to Sheep Meadow (2017 run).
         k_map = resample(run["street_speed"], run["ok"], b, fx, fy) / r17
@@ -499,9 +514,9 @@ def main():
     from scipy.ndimage import gaussian_filter
     by = {(r["scenario"], r["season"], r["dir"], r["res_m"], "small" in r["name"]): r for r in out_runs}
     for (sc, se, dr, rs, sm), r in by.items():
-        if sc != "today" or sm or ("2017", se, dr, rs, sm) not in by:
+        if sc != "today" or sm or (BEFORE, se, dr, rs, sm) not in by:
             continue
-        r17 = by[("2017", se, dr, rs, sm)]
+        r17 = by[(BEFORE, se, dr, rs, sm)]
         k = {}
         for rr in (r, r17):
             m = next(mm for mm in runs if mm["_name"] == rr["name"])
@@ -511,7 +526,7 @@ def main():
             den = gaussian_filter(ok.astype(np.float32), CHG_SMOOTH_CELLS)
             k[rr["scenario"]] = np.where(ok & (den > 0.3), num / np.maximum(den, 1e-6), np.nan)
         with np.errstate(invalid="ignore", divide="ignore"):
-            pct = (k["today"] / np.maximum(k["2017"], 0.02) - 1.0) * 100.0
+            pct = (k["today"] / np.maximum(k[BEFORE], 0.02) - 1.0) * 100.0
         pct = np.clip(pct, -99.0, 399.0)
         idx_ = painter.bin_index(np.nan_to_num(pct[fsl], nan=0.0), CHG_BREAKS,
                                  masks["building"][fsl] | ~np.isfinite(pct[fsl]))
@@ -526,7 +541,8 @@ def main():
         park = masks["report"]
         pk = pct[park]
         pk = pk[np.isfinite(pk)]
-        south = park & (masks["dist59"] <= 300.0)
+        # New York: the park's south 300 m. Elsewhere: within 300 m of the focus tower.
+        south = park & ((masks["dist59"] if NYC else masks["dist_focus"]) <= 300.0)
         ps = pct[south]
         ps = ps[np.isfinite(ps)]
         changes.append({"season": se, "dir": dr, "img": f"wind/{nm}?v={version}",
@@ -543,7 +559,8 @@ def main():
         "generated": datetime.now().isoformat(timespec="seconds"),
         "origin": {"lon": origin[0], "lat": origin[1]},
         "bounds": {"west": w_, "south": s_, "east": e_, "north": n_},
-        "anchor": {"name": "open lawns of the park", "ha": round(float(lawn.sum() * 4 / 1e4), 1),
+        "anchor": {"name": _city.get("wind.reference.kind", "open lawns of the park"),
+                   "ha": round(float(lawn.sum() * 4 / 1e4), 1),
                    "sheep_meadow": [cx, cy]},
         "legend": [{"min": K_BREAKS[i], "max": K_BREAKS[i + 1], "color": K_COLOURS[i]}
                    for i in range(len(K_COLOURS))],

@@ -30,8 +30,10 @@ import os
 
 import numpy as np
 
+from . import city as _city
+from .run_wind import HERO, run_name
 from .wind_domain import WIND_DIR
-from .wind_export import (RunBox, heat_points, lawn_reference, load_run, open_lawn, resample,
+from .wind_export import (OUT_DIR, RunBox, heat_points, lawn_reference, load_run, open_lawn, resample,
                           runs_available, sheep_meadow)
 
 VERIFY_DIR = os.path.join(WIND_DIR, "verify")
@@ -50,8 +52,7 @@ def main():
 
     # W0
     p = os.path.join(os.path.dirname(WIND_DIR), "..", "viewer", "wind", "windheat.json")
-    p = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                      "viewer", "wind", "windheat.json"))
+    p = os.path.normpath(os.path.join(OUT_DIR, "windheat.json"))
     if os.path.exists(p):
         with open(p, encoding="utf-8") as f:
             g = json.load(f).get("gate_w0", {})
@@ -84,7 +85,7 @@ def main():
 
     # W3, W4, W5 on the hero runs
     for m in runs:
-        if m["_name"] not in ("today_dec_315.0_8m", "2017_dec_315.0_8m"):
+        if m["_name"] not in (run_name("today", "dec", HERO, 8.0), run_name(_city.before(), "dec", HERO, 8.0)):
             continue
         run = load_run(m)
         b = run["box"]
