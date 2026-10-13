@@ -303,6 +303,103 @@ def towers(min_m=70.0, day="dec", log=print):
     return out
 
 
+def tno(day="feb", need_h=2.0, levels=4, log=print, focus_only=False):
+    """
+    The Dutch sunlight test on walls, before and today.
+
+    Dutch municipalities test sunlight on homes with the TNO norm: the
+    "lichte" (light) norm asks for at least 2 hours of possible sun per day on
+    the living-room window from 19 February to 21 October; 19 February is the
+    test day. Windows are not in the data, so this is a proxy per building:
+    the sunniest wall's lower half (where the lowest homes are), its sun hours
+    on the test day inside the analysis window (1.5 h after sunrise to 1.5 h
+    before sunset, which is stricter than the whole day). A building passes if
+    that wall gets need_h hours. Buildings that grew themselves are left out:
+    their walls changed. Wall sun from pipeline.facade, as in New York.
+    """
+    from . import facade
+    from .heat_inputs import load
+    cfg = city.config()
+    layers, masks, meta = load()
+    grid = grid_from_meta(meta, masks)
+    lab = masks["labels"]
+    n = int(lab.max())
+    lat, lon = meta["site"]["lat"], meta["site"]["lon"]
+    spec = next(d for d in analysis_days(cfg, lat, lon) if d["id"] == day)
+    fr = frames_for(spec, lat, lon, city.utc_offset(), STEP_MIN)
+    pos, lb = [p for p, _ in fr], [l for _, l in fr]
+    step_h = STEP_MIN / 60.0
+    import geopandas as gpd
+    from .heat_inputs import INPUTS_DIR
+    bld = gpd.read_file(os.path.join(INPUTS_DIR, "buildings.gpkg"))
+    grown = np.zeros(n + 1, bool)
+    grown[bld.loc[bld["grown"].astype(bool), "label"].to_numpy()] = True
+    keep = np.zeros(n + 1, bool)
+    keep[np.unique(lab[masks["window"]])] = True
+    keep[0] = False
+    keep &= ~grown
+    best = {}
+    scs = list(city.scenarios())
+    focus_cells = None
+    if focus_only:
+        # Today = the older city plus the focus tower (Zalmhaven) alone.
+        from pyproj import Transformer
+        t = meta["_transform"]
+        x, y = Transformer.from_crs("EPSG:4326", meta["grid"]["crs_build"], always_xy=True).transform(
+            *cfg["focus"]["lonlat"])
+        i = int(lab[int((y - t.f) / t.e), int((x - t.c) / t.a)])
+        focus_cells = masks["raised"] & (lab == i)
+        log(f"  only {cfg['focus']['name']} added: label {i}, {int(focus_cells.sum())} cells raised")
+    for sc in scs:
+        if focus_cells is not None and sc == "today":
+            surf = np.where(focus_cells, surface_for(layers, "today"), surface_for(layers, scs[0]))
+            heights = np.where(focus_cells, layers["dsm_today"], layers[f"dsm_{scs[0]}"]) - layers["dem"]
+            heights = heights.astype(np.float32)
+        else:
+            surf = surface_for(layers, sc)
+            heights = (layers[f"dsm_{sc}"] - layers["dem"]).astype(np.float32)
+        t0 = time.time()
+        pts = facade.wall_samples(masks["building"], heights, lab, grid.res_m, levels=levels,
+                                  log=lambda m: None, window=grid.frame, keep_labels=keep)
+        r = facade.solve(pts, surf, layers["dem"], grid.res_m, pos, lb, log=None,
+                         labels_grid=lab, bearing_deg=grid.bearing_deg)
+        sun = r["sun_hours"] * step_h
+        bearing = (np.degrees(np.arctan2(pts["ne"], pts["nn"])) + grid.bearing_deg + 360.0) % 360.0
+        low = pts["height_frac"] < 0.5
+        b = np.zeros(n + 1, np.float32)
+        for name, centre in facade.ORIENTS:
+            d = np.abs(((bearing - centre + 180.0) % 360.0) - 180.0)
+            sel = low & (d <= 45.0)
+            s = np.zeros(n + 1, np.float32)
+            c = np.zeros(n + 1, np.float32)
+            np.add.at(s, pts["label"][sel], sun[sel])
+            np.add.at(c, pts["label"][sel], 1.0)
+            np.maximum(b, np.where(c > 0, s / np.maximum(c, 1), 0.0), out=b)
+        best[sc] = b
+        log(f"  {sc}: {len(pts['label']):,} wall points on {int(keep.sum()):,} buildings, "
+            f"{len(fr)} frames, {time.time() - t0:.0f} s")
+    b0, b1 = best[city.before()], best["today"]
+    ids = np.nonzero(keep)[0]
+    pass0, pass1 = b0[ids] >= need_h, b1[ids] >= need_h
+    lost = ids[pass0 & ~pass1]
+    out = {"day": spec["label"], "window": list(spec["window"]), "need_h": need_h,
+           "buildings": int(len(ids)),
+           "pass_before": int(pass0.sum()), "pass_today": int(pass1.sum()),
+           "lost_the_norm": int(len(lost)),
+           "lost_1h_or_more": int(((b0[ids] - b1[ids]) >= 1.0).sum()),
+           "lost": [{"id": bld.loc[bld["label"] == i, "identificatie"].iloc[0], "label": int(i),
+                     "before_h": round(float(b0[i]), 2), "today_h": round(float(b1[i]), 2)} for i in lost]}
+    log(f"  TNO test, {spec['label']}: {out['buildings']:,} buildings in the window that did not grow "
+        f"themselves; sunniest lower wall at {need_h:.0f} h or more: {out['pass_before']:,} in "
+        f"{city.before()}, {out['pass_today']:,} today; {out['lost_the_norm']} lost it, "
+        f"{out['lost_1h_or_more']} lost an hour or more")
+    out["focus_only"] = bool(focus_only)
+    tag = f"tno_{day}" + ("_focus_only" if focus_only else "")
+    with open(os.path.join(shade_dir(), f"{tag}.json"), "w", encoding="utf-8", newline="\n") as f:
+        json.dump(out, f, indent=1)
+    return out
+
+
 def verify(log=print):
     """
     The shade gates for a city. The engine tests (pipeline.verify_solar,
@@ -372,6 +469,10 @@ def verify(log=print):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--verify", action="store_true", help="the city's shade gates S1 and S2")
+    ap.add_argument("--tno", action="store_true",
+                    help="the Dutch TNO sunlight test on walls, 19 February, before and today")
+    ap.add_argument("--tno-focus", action="store_true",
+                    help="the same test with only the focus tower (Zalmhaven) added to the older city")
     ap.add_argument("--scenario", choices=list(city.scenarios()) + ["both"], default="both")
     ap.add_argument("--no-viewer", action="store_true")
     ap.add_argument("--towers", action="store_true", help="each tower that grew, on its own, 21 December")
@@ -386,6 +487,9 @@ def main():
         return 0
     if args.verify:
         return 0 if verify(log=log) else 1
+    if args.tno or args.tno_focus:
+        tno(log=log, focus_only=args.tno_focus)
+        return 0
 
     scs = city.scenarios() if args.scenario == "both" else (args.scenario,)
     result = {"city": city.city_id(), "generated": time.strftime("%Y-%m-%dT%H:%M:%S"), "stats": {}}
