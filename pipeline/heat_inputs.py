@@ -57,8 +57,10 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
+from . import city as _city
+
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HEAT_DIR = os.path.join(HERE, "data", "heat")
+HEAT_DIR = _city.heat_dir()            # data/heat for New York, see pipeline/city.py
 INPUTS_DIR = os.path.join(HEAT_DIR, "inputs")
 
 RES_M = 2.0
@@ -532,7 +534,7 @@ def load(in_dir=INPUTS_DIR):
     """Layers, masks and metadata as written by save()."""
     import rasterio
     layers = {}
-    for name in ("dem", "dsm_2017", "dsm_today", "cdsm", "landcover"):
+    for name in ("dem", f"dsm_{_city.before()}", "dsm_today", "cdsm", "landcover"):
         with rasterio.open(os.path.join(in_dir, f"{name}.tif")) as src:
             layers[name] = src.read(1)
             transform, crs = src.transform, src.crs

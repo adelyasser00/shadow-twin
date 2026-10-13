@@ -35,6 +35,7 @@ import shutil
 import time
 from datetime import datetime
 
+from . import city as _city
 from .heat_inputs import HEAT_DIR, INPUTS_DIR
 
 MAX_SHADOW_M = 3500.0
@@ -44,7 +45,7 @@ OUTPUTS = ["tmrt", "utci", "shadow"]
 # would come back as NaN UTCI over the whole grid, so they are raised to it.
 # Tmrt does not depend on wind.
 MIN_WIND = 0.5
-SCENARIOS = ("2017", "today")
+SCENARIOS = _city.scenarios()     # ("2017", "today") for New York
 SEASONS = ("dec", "jun")
 DAYS_JSON = os.path.join(HEAT_DIR, "weather", "days.json")
 

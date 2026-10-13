@@ -1,0 +1,18 @@
+{
+ "id": "nyc",
+ "name": "Central Park, Manhattan",
+ "builder": "nyc_lidar",
+ "note": "The published city. Its inputs come from pipeline.heat_inputs and pipeline.run_nyc, unchanged; this file only names the paths and constants they use.",
+ "paths": {"heat": "data/heat", "wind": "data/wind", "data": "data/nyc", "viewer": "viewer"},
+ "crs": "EPSG:2263",
+ "crs_geotiff": "EPSG:32118",
+ "utc_offset": -5.0,
+ "clock_name": "EST",
+ "scenarios": ["2017", "today"],
+ "survey_year": 2017,
+ "weather": {"epw": "data/heat/weather", "station": "New York Central Park (Belvedere Castle), WMO 725053, TMYx 2011-2025"},
+ "analysis": {"rule": "ceqr", "days": ["dec", "mar", "may", "jun"]},
+ "heat": {"window_m": 1500.0, "near_m": 500.0, "tall_m": 100.0, "margin_m": 300.0},
+ "verify": {"v0_tower_m": 470.0, "v0_lat": 40.77, "v0_lon": -73.97},
+ "wind": {"reference": {"kind": "open lawns of the park", "spot_lonlat": [-73.9752, 40.7718], "spot_name": "Sheep Meadow"}}
+}

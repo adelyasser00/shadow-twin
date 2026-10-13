@@ -35,9 +35,10 @@ import math
 import os
 from datetime import date, datetime, timedelta, timezone
 
+from . import city as _city
 from .solar import sun_position
 
-EST = -5.0
+EST = _city.utc_offset()       # the city's standard time, all year: -5 for New York
 SEARCH_DAYS = 12
 SOLSTICES = {"dec": (12, 21), "jun": (6, 21)}
 CEQR_PAD_H = 1.5
@@ -183,7 +184,7 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("epw")
     ap.add_argument("--source-url", default=None)
-    ap.add_argument("--out", default=os.path.join("data", "heat", "weather", "days.json"))
+    ap.add_argument("--out", default=os.path.join(_city.heat_dir(), "weather", "days.json"))
     args = ap.parse_args()
 
     header, rows = read_epw(args.epw)
@@ -192,11 +193,11 @@ def main():
     for c in header["comments"][:1]:
         print(f"  {c[:160]}")
     if header["tz"] != EST:
-        raise SystemExit("this file is not on EST; the CEQR clock needs EST")
+        raise SystemExit(f"this file is on UTC{header['tz']:+g}; the city's clock is UTC{EST:+g}")
     out = {"epw": os.path.basename(args.epw), "epw_sha256": file_sha256(args.epw),
            "source_url": args.source_url, "header": header,
            "clear_sky": "Haurwitz (1945), sun at mid-hour from pipeline/solar.py",
-           "clock": ("EPW hour-ending rows in EST; solweig Weather.datetime is the end of "
+           "clock": (f"EPW hour-ending rows in {_city.clock_name()}; solweig Weather.datetime is the end of "
                      "the hour and the sun is evaluated 30 min earlier; outputs are labelled "
                      "with that sun time"),
            "seasons": {}}
@@ -225,7 +226,7 @@ def main():
               f"{best['clear_wh_m2']} Wh/m2 clear sky)")
         for c in ranked[:5]:
             print(f"    {c['date']}  {c['ratio']:.3f}")
-        print(f"  sunrise {rise:%H:%M}, sunset {set_:%H:%M} EST; CEQR window "
+        print(f"  sunrise {rise:%H:%M}, sunset {set_:%H:%M} {_city.clock_name()}; CEQR window "
               f"{w0:%H:%M} to {w1:%H:%M}")
         print(f"  reported steps (file time / sun time): "
               + ", ".join(f"{a}/{b}" for a, b in zip(report, out['seasons'][season]['report_sun_times'])))
