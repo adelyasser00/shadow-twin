@@ -31,7 +31,10 @@ inlet face and one outlet face.
             layer), which left the park behind the Central Park West rooftops
             too calm
   outlet    equilibrium at density 1 and the velocity one cell upstream
-  sides     periodic
+  sides     periodic, or (sides=...) equilibrium at a prescribed velocity on
+            both side faces: one-way nesting, where a fine box takes its
+            side winds from a coarser run instead of wrapping its own city
+            back in
   top       free slip (mirror)
   walls     ground, roofs and facades are free-slip (specular reflection at
             the halfway wall), and the first open cell above any ground or
@@ -81,7 +84,7 @@ IDX = np.full(27, -1, np.int32)
 for _i, _c in enumerate(C):
     IDX[(_c[0] + 1) * 9 + (_c[1] + 1) * 3 + _c[2] + 1] = _i
 
-FLUID, SOLID, INLET, OUTLET = 0, 1, 2, 3
+FLUID, SOLID, INLET, OUTLET, SIDE = 0, 1, 2, 3, 4
 KAPPA = 0.41
 NACC = 5                        # summed: u, v, w, |u|^2, |u|
 CS_SMAGORINSKY = 0.17
@@ -95,6 +98,7 @@ KERNEL = r"""
 #define TAU0 %(tau0)ff
 #define SMAG %(smag)ff
 #define SLIP %(slip)d
+#define SIDES %(sides)d
 
 __constant int CX[19] = {%(cx)s};
 __constant int CY[19] = {%(cy)s};
@@ -130,7 +134,8 @@ __kernel void step(__global const half* fa, __global half* fb,
                    __global const uchar* flag, __global const float* veg,
                    __global float* u, __global const float* prof,
                    __global float* acc, const int accumulate,
-                   __global const float* ta, __global const float* tb, const float tw) {
+                   __global const float* ta, __global const float* tb, const float tw,
+                   __global const float* side) {
     const long n = get_global_id(0);
     if (n >= N) return;
     const uchar fl = flag[n];
@@ -157,6 +162,16 @@ __kernel void step(__global const half* fa, __global half* fb,
         u[n] = ux; u[N + n] = uy; u[2 * N + n] = uz;
         return;
     }
+#if SIDES
+    if (fl == 4) {
+        // A side face held at the coarser run's wind: equilibrium, density 1.
+        const long q = (long)x + NX * ((long)(y == 0 ? 0 : 1) + 2L * (long)z), ms = 2L * NX * NZ;
+        rho = 1.0f; ux = side[q]; uy = side[ms + q]; uz = side[2 * ms + q];
+        for (int i = 0; i < 19; i++) store_f(fb, i, n, feq(i, rho, ux, uy, uz));
+        u[n] = ux; u[N + n] = uy; u[2 * N + n] = uz;
+        return;
+    }
+#endif
 
     // Pull streaming with halfway bounce-back and a mirror at the top.
     for (int i = 0; i < 19; i++) {
@@ -246,11 +261,13 @@ class Solver:
     veg      float (nz, ny, nx) drag coefficient per cell in lattice units, or None
     profile  float (nz,) inlet speed along +x at each height, lattice units
     tau0     molecular relaxation time; the Smagorinsky model adds to it
+    sides    float (3, nz, 2, nx) or None: velocities held on the y = 0 and
+             y = ny - 1 faces (one-way nesting); None keeps them periodic
     """
 
     def __init__(self, solid, profile, veg=None, tau0=0.5005, smag=CS_SMAGORINSKY,
                  slip=True, z0_m=0.1, res_m=8.0, turbulence=None, device=None, log=print,
-                 facade_drag=False):
+                 facade_drag=False, sides=None):
         import pyopencl as cl
         solid = np.ascontiguousarray(solid, dtype=bool)
         nz, ny, nx = solid.shape
@@ -262,6 +279,13 @@ class Solver:
         flag = np.where(solid, SOLID, FLUID).astype(np.uint8)
         flag[1:, :, 0][~solid[1:, :, 0]] = INLET
         flag[1:, :, -1][~solid[1:, :, -1]] = OUTLET
+        if sides is not None:
+            sides = np.ascontiguousarray(sides, np.float32)
+            if sides.shape != (3, nz, 2, nx):
+                raise ValueError("sides must be (3, nz, 2, nx)")
+            for j in (0, ny - 1):
+                open_ = ~solid[1:, j, 1:-1]
+                flag[1:, j, 1:-1][open_] = SIDE
         self.flag = flag
         prof = np.asarray(profile, np.float32)
         if prof.shape != (nz,):
@@ -298,6 +322,7 @@ class Solver:
             raise MemoryError(f"{n:,} cells need {lattice_bytes / 2**20:.0f} MB per lattice, "
                               f"the device allows {dev.max_mem_alloc_size / 2**20:.0f} MB per buffer")
         src = KERNEL % dict(nx=nx, ny=ny, nz=nz, n=n, tau0=tau0, smag=smag, slip=int(bool(slip)),
+                            sides=int(sides is not None),
                             idx=_csv(IDX),
                             cx=_csv(C[:, 0]), cy=_csv(C[:, 1]), cz=_csv(C[:, 2]),
                             w=_csv(W, "{:.9f}f"), opp=_csv(OPP), mz=_csv(MZ))
@@ -318,6 +343,9 @@ class Solver:
         self.d_ta = cl.Buffer(self.ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=zero)
         self.d_tb = cl.Buffer(self.ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=zero)
         self._slice = None
+        self.d_side = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR,
+                                hostbuf=(sides.ravel() if sides is not None else np.zeros(1, np.float32)))
+        self.sides = sides is not None
         self.prg.init(self.queue, self.gsize, self.lsize, self.fa, self.d_u, self.d_flag, self.d_prof)
         self.queue.finish()
         self.steps_done = 0
@@ -326,7 +354,8 @@ class Solver:
         log(f"  lbm: {nx} x {ny} x {nz} = {n / 1e6:.1f} M cells on {self.device_name}, "
             f"{self.mem_mb:.0f} MB, tau0 {tau0}, Cs {smag}, "
             + (f"slip walls, wall drag {self.cd_wall:.4f} (z0 {z0_m} m)" if slip else "no-slip walls")
-            + (", on facades too" if self.facade_drag else ""))
+            + (", on facades too" if self.facade_drag else "")
+            + (", sides held at a coarser run's wind" if self.sides else ""))
 
     def run(self, steps, accumulate_every=0, log_every=0):
         """Advance `steps` steps; sum velocity every `accumulate_every` steps (0: never)."""
@@ -336,7 +365,8 @@ class Solver:
             acc = 1 if accumulate_every and (s % accumulate_every == 0) else 0
             tw = self._inflow(self.steps_done + s)
             k(self.queue, self.gsize, self.lsize, self.fa, self.fb, self.d_flag, self.d_veg,
-              self.d_u, self.d_prof, self.d_acc, np.int32(acc), self.d_ta, self.d_tb, np.float32(tw))
+              self.d_u, self.d_prof, self.d_acc, np.int32(acc), self.d_ta, self.d_tb, np.float32(tw),
+              self.d_side)
             self.fa, self.fb = self.fb, self.fa
             self.samples += acc
             if log_every and (s + 1) % log_every == 0:
