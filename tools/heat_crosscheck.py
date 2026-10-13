@@ -125,6 +125,9 @@ def v3():
         import json as _json
         with open(stamp, "w", encoding="utf-8", newline="\n") as f:
             _json.dump(want, f)
+    lift = lift_tile(tile_dir)
+    if lift:
+        print(f"V3: tile lifted by {lift:.0f} m for both models (UMEP refuses ground below 0)", flush=True)
     work = os.path.join(HEAT_DIR, "verify", "v3")
     os.makedirs(work, exist_ok=True)
     wl = RH.weather_list("dec")
@@ -139,7 +142,7 @@ def v3():
         site = _json.load(f)["site"]
     patched = []
     for w in wl:
-        st = w.datetime - timedelta(minutes=30) + timedelta(hours=5)
+        st = w.datetime - timedelta(minutes=30) - timedelta(hours=UTC)
         if sun_position(st.replace(tzinfo=timezone.utc), site["lat"], site["lon"]).altitude > 0 \
                 and (w.measured_diffuse_rad or 0) < 1.0:
             w.measured_diffuse_rad = 1.0
@@ -250,6 +253,27 @@ def v3():
     line(out["pass"], f"V3 change agrees within {worst:.2f} C RMSE (limit {V3_RMSE_MAX:.0f} C)")
     save_gate("V3", out)
     return out["pass"]
+
+
+def lift_tile(tile_dir):
+    """
+    UMEP's raster loader refuses negative heights. Ground below sea level
+    (Rotterdam, in NAP) is lifted by whole metres on the V3 tile only, the
+    same for both models: shadows and radiation depend on relative heights,
+    and the site altitude is passed separately. Returns the lift, 0 if none.
+    """
+    import glob
+    import math
+    import rasterio
+    with rasterio.open(os.path.join(tile_dir, "dem.tif")) as src:
+        lo = float(src.read(1).min())
+    if lo >= 0.0:
+        return 0.0
+    lift = float(math.ceil(-lo) + 1)
+    for p in [os.path.join(tile_dir, "dem.tif")] + glob.glob(os.path.join(tile_dir, "dsm_*.tif")):
+        with rasterio.open(p, "r+") as dst:
+            dst.write(dst.read(1) + lift, 1)
+    return lift
 
 
 def tower_crop(size):
