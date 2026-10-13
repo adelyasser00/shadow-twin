@@ -199,7 +199,7 @@ def pack(args):
 def unpack(args):
     import tools.wind_nest as N
     root = cloud_dir(args)
-    done = []
+    done, twins = [], {}
     for rj in sorted(glob.glob(os.path.join(args.results, "**", "result.json"), recursive=True)):
         rdir = os.path.dirname(rj)
         name = os.path.basename(rdir)
@@ -216,12 +216,21 @@ def unpack(args):
         extra = {"building": ex["building"], "ground": ex["ground"]}
         out = os.path.join(args.out or N.OUT, name)
         if os.path.exists(os.path.join(out, "run.json")):
-            print(f"{name}: already unpacked")
-        else:
-            N.finish(out, pk, meta, extra, res, time.time() - rmeta.get("solve_s", 0))
+            if args.out:
+                print(f"{name}: already unpacked")
+                continue
+            # Also run here: the cloud copy goes beside it and the two are compared (D22, box 4).
+            copy = os.path.join(root, "cloud_copy", name)
+            if not os.path.exists(os.path.join(copy, "run.json")):
+                N.finish(copy, pk, meta, extra, res, time.time() - rmeta.get("solve_s", 0))
+            twins.setdefault(name.split("_dec_", 1)[1], {})[name.split("_dec_", 1)[0]] = (out, copy)
+            continue
+        N.finish(out, pk, meta, extra, res, time.time() - rmeta.get("solve_s", 0))
         done.append(meta)
     if args.out:
         return
+    for key, pair in twins.items():
+        compare(N, root, key, pair)
     for key in sorted({(m["theta_from_deg"], m["box_size"]["width_m"], m["box_size"]["length_m"],
                         m["box_size"]["height_m"], m["average_flow_throughs"], m["sides"], m["parent"].split("8m", 1)[-1])
                        for m in done}):
@@ -235,6 +244,44 @@ def unpack(args):
             N.score(theta, width=width, average=average, sides=sides, parent_tag=tag, length=length, height=height)
         except (OSError, SystemExit) as e:
             print(f"  not scored yet ({e}): both years are needed")
+
+
+def compare(N, root, key, pair):
+    """A box solved both here and in the cloud: D22's bar (change within 3 points; each year's median street
+    cell no further apart than that run's own halves)."""
+    from pipeline.wind_export import RunBox, resample
+    if set(pair) != {N.BEFORE, "today"}:
+        print(f"  {key}: both years are needed to compare")
+        return
+    x, y, ring = N.tower_ring()
+    out = {"box": key, "years": {}}
+    med = {}
+    for sc, (here, cloud) in pair.items():
+        z = {}
+        for which, d in (("here", here), ("cloud", cloud)):
+            with open(os.path.join(d, "run.json"), encoding="utf-8") as f:
+                m = json.load(f)
+            s = np.load(os.path.join(d, "street.npz"))
+            ok = (~s["roof"]) & np.isfinite(s["street_speed"])
+            med[sc, which] = float(np.nanmedian(resample(s["street_speed"], ok, RunBox(m), x[ring], y[ring])))
+            z[which] = (s["street_speed"], ok, m)
+        (a, oka, ma), (b, okb, mb) = z["here"], z["cloud"]
+        ok = oka & okb
+        ok[:, :N.INLET_SKIP] = False
+        ok[:, -N.INLET_SKIP:] = False
+        cell = float(np.median(np.abs(a[ok] - b[ok])) / np.median((a[ok] + b[ok]) / 2))
+        halves = ma["convergence_street_speed"]["median_abs_diff_over_median_speed"]
+        out["years"][sc] = {"median_cell_diff": round(cell, 4), "halves_here": halves,
+                            "device_here": ma["device"], "device_cloud": mb["device"], "pass": cell <= halves}
+    ch = {w: (med["today", w] / med[N.BEFORE, w] - 1) * 100 for w in ("here", "cloud")}
+    out["change_pct"] = {w: round(v, 1) for w, v in ch.items()}
+    out["pass"] = abs(ch["here"] - ch["cloud"]) <= 3.0 and all(v["pass"] for v in out["years"].values())
+    with open(os.path.join(root, "cloud_copy", f"compare_{key}.json"), "w", encoding="utf-8", newline="\n") as f:
+        json.dump(out, f, indent=1)
+    print(f"  {key}, here vs cloud: change {ch['here']:+.1f}% vs {ch['cloud']:+.1f}%; median street cell apart "
+          + ", ".join(f"{sc} {v['median_cell_diff'] * 100:.1f}% (halves {v['halves_here'] * 100:.1f}%)"
+                      for sc, v in out["years"].items())
+          + f": {'PASS' if out['pass'] else 'FAIL'}")
 
 
 def selftest(args):
