@@ -105,7 +105,9 @@ def ceqr_dec_suns(lat, lon, step_min=5, pad_min=15):
     out = []
     while t <= end:
         local = datetime(y, m, d) + timedelta(minutes=t)
-        p = sun_position((local - timedelta(hours=EST)).replace(tzinfo=timezone.utc), lat, lon)
+        # Geometric sun: a little lower, so the search errs toward longer shadows.
+        p = sun_position((local - timedelta(hours=EST)).replace(tzinfo=timezone.utc), lat, lon,
+                         refraction=False)
         if p.altitude > 0:
             out.append(p)
         t += step_min

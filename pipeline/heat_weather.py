@@ -92,8 +92,9 @@ def row_for(ts, rows):
 
 
 def sun_at(local_naive, lat, lon):
+    """Geometric sun: sunrise uses -0.833 deg, and the clear-sky day choice is a definition."""
     utc = (local_naive - timedelta(hours=EST)).replace(tzinfo=timezone.utc)
-    return sun_position(utc, lat, lon)
+    return sun_position(utc, lat, lon, refraction=False)
 
 
 def haurwitz(alt_deg):

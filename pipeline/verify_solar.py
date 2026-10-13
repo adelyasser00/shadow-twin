@@ -19,7 +19,8 @@ def _peak_of_day(y, m, d, lat, lon):
     best = None
     start = datetime(y, m, d, 0, 0, tzinfo=timezone.utc)
     for i in range(1440):
-        p = sun_position(start + timedelta(minutes=i), lat, lon)
+        # Geometric sun: the analytical peak 90 - |lat - decl| has no air in it.
+        p = sun_position(start + timedelta(minutes=i), lat, lon, refraction=False)
         if best is None or p.altitude > best.altitude:
             best = p
     return best
@@ -103,6 +104,20 @@ def main():
         f"sun is in the west at 16:00 UTC        azimuth {evening.azimuth:6.1f}"
     )
     ok &= east_ok and west_ok
+
+    print()
+
+    # 5. Atmospheric refraction: NOAA's fit against an independent formula,
+    #    Saemundsson's (the one Reda and Andreas's SPA, and so SOLWEIG, use):
+    #    R = 1.02 / tan(h + 10.3 / (h + 5.11)) arcminutes, at 1010 hPa, 10 C.
+    import math
+    from .solar import refraction_deg
+    for h in (3.0, 7.0, 15.0, 30.0, 60.0):
+        bennett = 1.02 / math.tan(math.radians(h + 10.3 / (h + 5.11))) / 60.0
+        ok &= check(f"refraction at {h:4.0f} deg vs Saemundsson", bennett, refraction_deg(h), 0.01)
+    p = sun_position(datetime(2026, 7, 15, 5, 0, tzinfo=timezone.utc), ALEX_LAT, ALEX_LON)
+    ok &= check("apparent minus geometric altitude", refraction_deg(p.altitude_geometric),
+                p.altitude - p.altitude_geometric, 1e-9)
 
     print("-" * 84)
     print("ALL CHECKS PASSED" if ok else "SOMETHING FAILED, STOP HERE")

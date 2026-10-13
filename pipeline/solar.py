@@ -12,21 +12,67 @@ downstream takes (altitude, azimuth) and does pure geometry.
 Convention used everywhere in this project:
     altitude  degrees above the horizon, 0 = horizon, 90 = overhead
     azimuth   degrees clockwise from true north, 0 = N, 90 = E, 180 = S, 270 = W
+
+Atmospheric refraction
+----------------------
+Air bends sunlight down, so the sun looks higher than it geometrically is,
+and shadows follow the sun you see. NOAA's solar calculator corrects the
+elevation with a piecewise fit (Saemundsson-type above 5 degrees, a
+polynomial below): 0.12 deg at 7 deg up, 0.06 at 15, nothing near overhead.
+Ignored, a December shadow at 7 deg is 1.7% too long, and SOLWEIG's sun
+(Reda and Andreas, with refraction) disagreed with ours at low sun
+(NL_NOTES.md D17). It is on by default; TWIN_REFRACTION=0 turns it off and
+reproduces the runs made before it.
+
+Definitions keep the geometric sun: sunrise and sunset use the standard
+-0.833 deg (refraction and the sun's radius already folded in), so callers
+that find the CEQR window pass refraction=False. So do searches that must be
+conservative, such as which far towers can shade a window.
 """
 
 from __future__ import annotations
 
 import math
+import os
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 
 
+# On unless TWIN_REFRACTION=0 (to reproduce runs made before it).
+REFRACTION = os.environ.get("TWIN_REFRACTION", "1").strip() != "0"
+
+
+def refraction_deg(elevation_deg: float) -> float:
+    """
+    Atmospheric refraction, degrees, for a geometric solar elevation.
+
+    NOAA ESRL solar calculator (gml.noaa.gov/grad/solcalc/calcdetails.html):
+    arcseconds by elevation band, divided by 3600.
+    """
+    h = elevation_deg
+    if h > 85.0:
+        return 0.0
+    te = math.tan(math.radians(h))
+    if h > 5.0:
+        arcsec = 58.1 / te - 0.07 / te ** 3 + 0.000086 / te ** 5
+    elif h > -0.575:
+        arcsec = 1735.0 + h * (-518.2 + h * (103.4 + h * (-12.79 + h * 0.711)))
+    else:
+        arcsec = -20.774 / te
+    return arcsec / 3600.0
+
+
 @dataclass(frozen=True)
 class SunPosition:
-    altitude: float          # degrees above horizon
+    altitude: float          # degrees above horizon, as seen (refracted unless asked not to)
     azimuth: float           # degrees clockwise from north
     declination: float       # degrees
     when: datetime           # the UTC instant this was computed for
+    refraction: float = 0.0  # degrees added to the geometric altitude
+
+    @property
+    def altitude_geometric(self) -> float:
+        return self.altitude - self.refraction
 
     @property
     def above_horizon(self) -> bool:
@@ -56,12 +102,14 @@ def _julian_day(dt_utc: datetime) -> float:
     )
 
 
-def sun_position(dt_utc: datetime, lat: float, lon: float) -> SunPosition:
+def sun_position(dt_utc: datetime, lat: float, lon: float, refraction: bool | None = None) -> SunPosition:
     """
     Solar altitude and azimuth for a UTC instant at a geographic point.
 
-    lat  degrees north, positive north
-    lon  degrees east, positive east
+    lat         degrees north, positive north
+    lon         degrees east, positive east
+    refraction  add atmospheric refraction to the altitude; None follows
+                REFRACTION (on unless TWIN_REFRACTION=0)
     """
     if dt_utc.tzinfo is None:
         dt_utc = dt_utc.replace(tzinfo=timezone.utc)
@@ -148,8 +196,11 @@ def sun_position(dt_utc: datetime, lat: float, lon: float) -> SunPosition:
         else:
             azimuth = (540.0 - a) % 360.0
 
+    if refraction is None:
+        refraction = REFRACTION
+    r = refraction_deg(altitude) if refraction else 0.0
     return SunPosition(
-        altitude=altitude, azimuth=azimuth, declination=decl, when=dt_utc
+        altitude=altitude + r, azimuth=azimuth, declination=decl, when=dt_utc, refraction=r
     )
 
 

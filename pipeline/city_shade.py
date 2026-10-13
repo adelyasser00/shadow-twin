@@ -436,7 +436,7 @@ def verify(log=print):
         best = None
         for k in range(0, 24 * 60, 2):
             t = datetime(y, m, d, tzinfo=timezone.utc) + timedelta(minutes=k)
-            p = sun_position(t, lat, lon)
+            p = sun_position(t, lat, lon, refraction=False)   # the analytical peak is geometric
             if best is None or p.altitude > best.altitude:
                 best = p
         want = 90.0 - abs(lat - best.declination)

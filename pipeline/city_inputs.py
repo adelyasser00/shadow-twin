@@ -246,7 +246,9 @@ def december_suns(lat, lon, utc_offset, step_min=5, pad_min=15):
     w0, w1, _, _ = day_window("2026-12-21", lat, lon, utc_offset)
     t, out = w0 - timedelta(minutes=pad_min), []
     while t <= w1 + timedelta(minutes=pad_min):
-        p = sun_position((t - timedelta(hours=utc_offset)).replace(tzinfo=timezone.utc), lat, lon)
+        # Geometric sun, so the caster search errs toward longer shadows.
+        p = sun_position((t - timedelta(hours=utc_offset)).replace(tzinfo=timezone.utc), lat, lon,
+                         refraction=False)
         if p.altitude > 0:
             out.append(p)
         t += timedelta(minutes=step_min)

@@ -25,9 +25,9 @@ CEQR = [
 ]
 
 
-def sun_at(local_naive, lat, lon, utc_offset):
+def sun_at(local_naive, lat, lon, utc_offset, refraction=None):
     utc = (local_naive - timedelta(hours=utc_offset)).replace(tzinfo=timezone.utc)
-    return sun_position(utc, lat, lon)
+    return sun_position(utc, lat, lon, refraction=refraction)
 
 
 def crossings(day, lat, lon, utc_offset, alt=-0.833):
@@ -35,11 +35,12 @@ def crossings(day, lat, lon, utc_offset, alt=-0.833):
     if isinstance(day, str):
         day = date.fromisoformat(day)
     base = datetime(day.year, day.month, day.day)
-    prev = sun_at(base, lat, lon, utc_offset).altitude
+    # Geometric sun: -0.833 deg already holds the horizon's refraction.
+    prev = sun_at(base, lat, lon, utc_offset, refraction=False).altitude
     rise = set_ = None
     for m in range(1, 24 * 60 + 1):
         t = base + timedelta(minutes=m)
-        a = sun_at(t, lat, lon, utc_offset).altitude
+        a = sun_at(t, lat, lon, utc_offset, refraction=False).altitude
         if prev < alt <= a and rise is None:
             rise = t
         if prev >= alt > a:
