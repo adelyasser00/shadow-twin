@@ -188,7 +188,7 @@ def v3():
                "lc_path": os.path.join(tile_dir, "landcover.tif"),
                "aniso_path": os.path.join(d, "svf", "shadowmats.npz"),
                "only_global": 0, "use_veg_dem": 1, "conifer": 0, "person_cylinder": 1,
-               "utc": UTC, "use_landcover": 1, "use_dem_for_buildings": 0, "use_aniso": 1,
+               "utc": int(UTC) if float(UTC).is_integer() else UTC, "use_landcover": 1, "use_dem_for_buildings": 0, "use_aniso": 1,
                "use_wall_scheme": 0, "wall_type": "Brick", "output_tmrt": 1, "output_kup": 0,
                "output_kdown": 0, "output_lup": 0, "output_ldown": 0, "output_sh": 1,
                "save_buildings": 0, "output_kdiff": 0, "output_tree_planter": 0, "wall_netcdf": 0}
