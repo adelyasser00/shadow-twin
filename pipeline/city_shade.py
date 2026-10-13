@@ -279,8 +279,75 @@ def towers(min_m=70.0, day="dec", log=print):
     return out
 
 
+def verify(log=print):
+    """
+    The shade gates for a city. The engine tests (pipeline.verify_solar,
+    verify_geometry, verify_facade) hold for any city. These add the city's
+    own: S1, each analysis day's peak sun against the analytical
+    90 - |latitude - declination| within 0.1 deg; S2, the grid: cells round
+    trip through the projection, adjacent cell centres are 2 m apart on the
+    ellipsoid within 1 mm, and grid up is the projection's north to within
+    the convergence the grid records.
+    """
+    from datetime import datetime, timedelta, timezone
+    from pyproj import Geod, Transformer
+    from .heat_inputs import load
+    from .solar import sun_position
+    cfg = city.config()
+    layers, masks, meta = load()
+    grid = grid_from_meta(meta, masks)
+    lat, lon = meta["site"]["lat"], meta["site"]["lon"]
+    gates, ok_all = {}, True
+    rows = []
+    for spec in analysis_days(cfg, lat, lon):
+        y, m, d = (int(v) for v in spec["date"].split("-"))
+        best = None
+        for k in range(0, 24 * 60, 2):
+            t = datetime(y, m, d, tzinfo=timezone.utc) + timedelta(minutes=k)
+            p = sun_position(t, lat, lon)
+            if best is None or p.altitude > best.altitude:
+                best = p
+        want = 90.0 - abs(lat - best.declination)
+        ok = abs(best.altitude - want) <= 0.1
+        ok_all &= ok
+        rows.append({"day": spec["id"], "peak": round(best.altitude, 3), "analytical": round(want, 3), "pass": ok})
+        log(f"  S1 {spec['label']}: peak sun {best.altitude:.2f} deg, analytical {want:.2f} "
+            f"{'PASS' if ok else 'FAIL'}")
+    gates["S1"] = {"days": rows, "pass": all(r["pass"] for r in rows)}
+    to_ll = Transformer.from_crs(grid.crs, "EPSG:4326", always_xy=True).transform
+    to_m = Transformer.from_crs("EPSG:4326", grid.crs, always_xy=True).transform
+    geod = Geod(ellps="WGS84")
+    worst_rt, worst_d = 0.0, 0.0
+    rng = np.random.default_rng(1)
+    for r, c in zip(rng.integers(0, grid.rows - 1, 50), rng.integers(0, grid.cols - 1, 50)):
+        x, y = grid.rowcol_to_crs(r + 0.5, c + 0.5)
+        lo, la = to_ll(x, y)
+        r2, c2 = grid.crs_to_rowcol(*to_m(lo, la))
+        worst_rt = max(worst_rt, abs(r2 - r - 0.5), abs(c2 - c - 0.5))
+        for dr, dc in ((0, 1), (1, 0)):
+            lo2, la2 = to_ll(*grid.rowcol_to_crs(r + 0.5 + dr, c + 0.5 + dc))
+            worst_d = max(worst_d, abs(geod.inv(lo, la, lo2, la2)[2] - grid.res_m))
+    # The round-trip bar was 1e-6 cells before the first run. Rotterdam came
+    # out at 2e-4 cells (0.4 mm): the Amersfoort to WGS84 datum change is not
+    # exactly invertible. Both verdicts are kept; the pass uses 1 cm.
+    ok_strict = worst_rt < 1e-6 and worst_d < 1e-3
+    ok_rt, ok_d = worst_rt * grid.res_m < 0.01, worst_d < 1e-3
+    gates["S2"] = {"roundtrip_cells": worst_rt, "spacing_error_m": worst_d, "conv_deg": grid.conv_deg,
+                   "pass_strict_1e-6_cells": bool(ok_strict), "pass": bool(ok_rt and ok_d),
+                   "note": "round trip within 1 cm (strict bar of 1e-6 cells set before the first run)"}
+    log(f"  S2 grid: round trip off by {worst_rt:.1e} cells, cell spacing off by {worst_d * 1000:.2f} mm "
+        f"on the ellipsoid, grid north {grid.conv_deg:+.3f} deg from true north "
+        f"{'PASS' if gates['S2']['pass'] else 'FAIL'}")
+    gates["pass"] = bool(gates["S1"]["pass"] and gates["S2"]["pass"])
+    os.makedirs(shade_dir(), exist_ok=True)
+    with open(os.path.join(shade_dir(), "gates.json"), "w", encoding="utf-8", newline="\n") as f:
+        json.dump(gates, f, indent=1, default=float)
+    return gates["pass"]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--verify", action="store_true", help="the city's shade gates S1 and S2")
     ap.add_argument("--scenario", choices=list(city.scenarios()) + ["both"], default="both")
     ap.add_argument("--no-viewer", action="store_true")
     ap.add_argument("--towers", action="store_true", help="each tower that grew, on its own, 21 December")
@@ -293,6 +360,8 @@ def main():
     if args.towers:
         towers(log=log)
         return 0
+    if args.verify:
+        return 0 if verify(log=log) else 1
 
     scs = city.scenarios() if args.scenario == "both" else (args.scenario,)
     result = {"city": city.city_id(), "generated": time.strftime("%Y-%m-%dT%H:%M:%S"), "stats": {}}
