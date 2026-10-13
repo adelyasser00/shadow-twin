@@ -104,28 +104,30 @@ def parent_at(m, u, uu, pb, x, y, zabs):
     return U, 0.5 * np.maximum(UU - (U ** 2).sum(axis=0), 0.0), np.clip(fluid, 0.0, 1.0)
 
 
-def nest_box(width):
-    return dict(NEST, width_m=float(width))
+def nest_box(width, length=NEST["length_m"], height=NEST["height_m"]):
+    return dict(NEST, width_m=float(width), length_m=float(length), height_m=float(height))
 
 
 def nest_name(scenario, theta, facade=True, width=NEST["width_m"], average=AVERAGE_HERO, sides="periodic",
-              parent_tag=""):
+              parent_tag="", length=NEST["length_m"], height=NEST["height_m"]):
     return (f"{scenario}_dec_{theta:05.1f}_{RES:g}m" + ("_fw" if facade else "")
             + ("" if width == NEST["width_m"] else f"_w{width:g}")
+            + ("" if length == NEST["length_m"] else f"_l{length:g}")
+            + ("" if height == NEST["height_m"] else f"_h{height:g}")
             + ("" if average == AVERAGE_HERO else f"_avg{average:g}")
             + ("" if sides == "periodic" else "_sides")
             + (f"_p{parent_tag.strip('_')}" if parent_tag else ""))
 
 
 def prepare(scenario, theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_HERO,
-            sides="periodic", parent_tag=""):
+            sides="periodic", parent_tag="", length=NEST["length_m"], height=NEST["height_m"]):
     """Everything the solve needs, as one dict of arrays (pipeline/nest_solve.py), and the meta to save."""
     canvas, info = load_canvas()
     m, u, uu = load_parent(scenario, theta, parent_tag)
     pb = parent_box(info, m)
     tx, ty = tower_xy()
     info_c = dict(info, roi_centre=[float(tx), float(ty)])
-    box = nest_box(width)
+    box = nest_box(width, length, height)
     solid, veg, cols, bx = voxelise(canvas, info_c, theta, RES, scenario, "dec", box)
     del canvas
     nz, ny, nx = solid.shape
@@ -213,14 +215,14 @@ def finish(out, pack, meta, extra, res, t0, log=print):
 
 
 def run_one(scenario, theta, facade=True, log=print, force=False, width=NEST["width_m"], average=AVERAGE_HERO,
-            sides="periodic", parent_tag="", backend="opencl"):
+            sides="periodic", parent_tag="", backend="opencl", length=NEST["length_m"], height=NEST["height_m"]):
     from pipeline.nest_solve import solve
-    out = os.path.join(OUT, nest_name(scenario, theta, facade, width, average, sides, parent_tag))
+    out = os.path.join(OUT, nest_name(scenario, theta, facade, width, average, sides, parent_tag, length, height))
     if os.path.exists(os.path.join(out, "run.json")) and not force:
         log(f"  {os.path.basename(out)}: already done")
         return out
     t0 = time.time()
-    pack, meta, extra = prepare(scenario, theta, facade, log, width, average, sides, parent_tag)
+    pack, meta, extra = prepare(scenario, theta, facade, log, width, average, sides, parent_tag, length, height)
     log(f"  {os.path.basename(out)}: solving")
     res = solve(pack, log=log, backend=backend)
     return finish(out, pack, meta, extra, res, t0, log=log)
@@ -262,12 +264,12 @@ def parent_ring_speed(sc, theta, parent_tag, x, y, ring):
 
 
 def score(theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_HERO, sides="periodic",
-          parent_tag=""):
+          parent_tag="", length=NEST["length_m"], height=NEST["height_m"]):
     from pipeline.wind_export import RunBox, resample
     x, y, ring = tower_ring()
     res = {}
     for sc in (BEFORE, "today"):
-        d = os.path.join(OUT, nest_name(sc, theta, facade, width, average, sides, parent_tag))
+        d = os.path.join(OUT, nest_name(sc, theta, facade, width, average, sides, parent_tag, length, height))
         with open(os.path.join(d, "run.json"), encoding="utf-8") as f:
             m = json.load(f)
         z = np.load(os.path.join(d, "street.npz"))
@@ -280,7 +282,8 @@ def score(theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_
                    "n_2m": int(np.isfinite(v).sum()), "median_8m_x_lawn": float(np.nanmedian(k8)),
                    "nesting_check": m["nesting_check"], "convergence": m["convergence_street_speed"]}
     a, b = res[BEFORE], res["today"]
-    out = {"tower": TOWER, "theta": theta, "width_m": width, "average_flow_throughs": average, "sides": sides,
+    out = {"tower": TOWER, "theta": theta, "width_m": width, "length_m": length, "height_m": height,
+           "average_flow_throughs": average, "sides": sides,
            "parent": parent_name(BEFORE, "dec", theta, PARENT_RES, parent_tag),
            "ring_m": RING_M, "ring_cells": int(ring.sum()),
            "runs": res,
@@ -291,12 +294,14 @@ def score(theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_
                                                1),
            "generated": datetime.now().isoformat(timespec="seconds")}
     tag = (("" if width == NEST["width_m"] else f"_w{width:g}")
+           + ("" if length == NEST["length_m"] else f"_l{length:g}")
+           + ("" if height == NEST["height_m"] else f"_h{height:g}")
            + ("" if average == AVERAGE_HERO else f"_avg{average:g}")
            + ("" if sides == "periodic" else "_sides")
            + (f"_p{parent_tag.strip('_')}" if parent_tag else ""))
     with open(os.path.join(OUT, f"score_{theta:05.1f}{tag}.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(out, f, indent=1)
-    log(f"  {TOWER}, {theta:g} deg, {width:g} m wide box, {average:g} flow-throughs, street ring {RING_M[0]:g}-{RING_M[1]:g} m, sides {sides}: change since {BEFORE} "
+    log(f"  {TOWER}, {theta:g} deg, box {length:g} x {width:g} x {height:g} m, {average:g} flow-throughs, street ring {RING_M[0]:g}-{RING_M[1]:g} m, sides {sides}: change since {BEFORE} "
         f"{out['change_pct_2m']:+.1f}% at 2 m (windiest tenth {out['change_p90_pct_2m']:+.1f}%), "
         f"{out['change_pct_8m']:+.1f}% at 8 m; next cell up (2-4 m, does not decide) "
         f"{out['change_pct_2m_next_cell_up']:+.1f}%")
@@ -317,6 +322,8 @@ def main():
     ap.add_argument("--parent-tag", default="", help="the 8 m runs' folder suffix, e.g. _zh (run_wind --tag)")
     ap.add_argument("--backend", default="opencl", choices=("opencl", "cuda", "auto"))
     ap.add_argument("--width", type=float, default=NEST["width_m"], help="box width, m (400: the blockage check)")
+    ap.add_argument("--length", type=float, default=NEST["length_m"], help="box length along the wind, m")
+    ap.add_argument("--height", type=float, default=NEST["height_m"], help="box height, m")
     ap.add_argument("--average", type=float, default=AVERAGE_HERO, help="flow-throughs averaged")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
@@ -328,8 +335,10 @@ def main():
     if args.what == "run":
         for sc in args.scenario:
             run_one(sc, args.dir, log=log, force=args.force, width=args.width, average=args.average,
-                    sides=args.sides, parent_tag=args.parent_tag, backend=args.backend)
-    score(args.dir, log=log, width=args.width, average=args.average, sides=args.sides, parent_tag=args.parent_tag)
+                    sides=args.sides, parent_tag=args.parent_tag, backend=args.backend, length=args.length,
+                    height=args.height)
+    score(args.dir, log=log, width=args.width, average=args.average, sides=args.sides, parent_tag=args.parent_tag,
+          length=args.length, height=args.height)
     return 0
 
 
