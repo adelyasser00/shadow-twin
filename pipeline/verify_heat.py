@@ -211,9 +211,15 @@ def v1():
     lat, lon = meta["site"]["lat"], meta["site"]["lon"]
     loc = solweig.Location(latitude=lat, longitude=lon, utc_offset=UTC)
     times = [10, 12, 14]
+    # V1_HOURS=11,13,15 runs the same check at other hours as information,
+    # saved as gate "V1_hours" so the V1 verdict itself is never replaced.
+    gate = "V1"
+    if os.environ.get("V1_HOURS"):
+        times = [int(h) for h in os.environ["V1_HOURS"].split(",")]
+        gate = "V1_hours"
     ws = [solweig.Weather(datetime=datetime(2026, 12, 21, h, 30), ta=0.0, rh=50.0,
                           global_rad=300.0, timestep_minutes=60.0) for h in times]
-    od = os.path.join(VERIFY_DIR, "v1")
+    od = os.path.join(VERIFY_DIR, gate.lower())
     solweig.calculate(surface=surface, weather=ws, location=loc, output_dir=od,
                       max_shadow_distance_m=MAX_SHADOW_M, outputs=["shadow"])
     fp = masks["building"]
@@ -245,7 +251,7 @@ def v1():
                              "agreement_window": agree_w, "shaded_ha_solweig": a_s * 4 / 1e4,
                              "shaded_ha_pipeline": a_p * 4 / 1e4, "area_diff": area, "pass": ok})
     out["pass"] = bool(ok_all)
-    save_gate("V1", out)
+    save_gate(gate, out)
     return ok_all
 
 
