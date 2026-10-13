@@ -43,16 +43,17 @@ import time
 
 import numpy as np
 
+from . import city as _city
 from .heat_inputs import HEAT_DIR, INPUTS_DIR
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WIND_DIR = os.path.join(HERE, "data", "wind")
+WIND_DIR = _city.wind_dir()            # data/wind for New York
 CANVAS = os.path.join(WIND_DIR, "canvas.npz")
 FOOTPRINTS = os.path.join(HERE, "data", "nyc", "footprints_crop.geojson")
 
 RES_CANVAS = 2.0
 CANVAS_HALF_M = 3300.0          # canvas spans 6.6 km, enough for a 3.2 x 2.9 km box at any angle
-SURVEY_YEAR = 2017
+SURVEY_YEAR = int(_city.get("survey_year", 2017))
 CD_TREE = 0.2
 LAD = {"dec": 0.1, "jun": 0.5}  # m2 of leaf (or branch) per m3 of crown
 CROWN_BASE = 0.25               # crown starts at a quarter of the tree height
@@ -78,7 +79,38 @@ def roi_centre(meta, masks):
     return float(x - 250.0 * ax["ux"]), float(y - 250.0 * ax["uy"])
 
 
-def build_canvas(log=print):
+def window_centre(meta, masks):
+    """Study centre for any city: the middle of the analysis window, in the grid's metres."""
+    t = meta["_transform"]
+    rr, cc = np.nonzero(masks["window"])
+    return float(t.c + (cc.mean() + 0.5) * t.a), float(t.f + (rr.mean() + 0.5) * t.e)
+
+
+def city_prisms(n, ctf, crs, log=print):
+    """
+    Buildings beyond the heat grid for a city with surveys: the shared
+    builder's table of measured heights (pipeline.city_inputs), today and in
+    the older survey. Where the older survey has no value, a building stands
+    in it only if it was built before the survey year, as in New York.
+    """
+    import geopandas as gpd
+    from rasterio import features
+    df = gpd.read_file(os.path.join(_city.data_dir(), "buildings_wide.gpkg")).to_crs(crs)
+    df = df[df["h_today_m"] > 0].reset_index(drop=True)
+    lab = features.rasterize([(g, i + 1) for i, g in enumerate(df.geometry)], out_shape=(n, n),
+                             transform=ctf, fill=0, dtype="int32")
+    today = np.concatenate([[0.0], df["h_today_m"].to_numpy(np.float32)])
+    hb = df["h_before_m"].to_numpy(np.float32)
+    yr = df["year"].to_numpy()
+    old = (yr > 0) & (yr < SURVEY_YEAR)
+    before = np.concatenate([[0.0], np.where(np.isfinite(hb), np.maximum(hb, 0.0),
+                                             np.where(old, df["h_today_m"].to_numpy(np.float32), 0.0))])
+    log(f"  {len(df):,} buildings beyond the heat grid from the measured table")
+    return today[lab].astype(np.float32), before.astype(np.float32)[lab], len(df)
+
+
+def build_canvas(log=print, out_path=None):
+    """The canvas, written to CANVAS (or out_path, to rebuild it elsewhere for a check)."""
     import rasterio
     from pyproj import Transformer
     from rasterio import features
@@ -90,11 +122,14 @@ def build_canvas(log=print):
 
     layers, masks, meta = load()
     t = meta["_transform"]
-    cx, cy = roi_centre(meta, masks)
+    nyc = _city.city_id() == "nyc"
+    crs = "EPSG:32118" if nyc else _city.config()["crs_geotiff"]
+    before = _city.before()
+    cx, cy = roi_centre(meta, masks) if nyc else window_centre(meta, masks)
     n = int(round(2 * CANVAS_HALF_M / RES_CANVAS))
     x0, y1 = cx - CANVAS_HALF_M, cy + CANVAS_HALF_M
     ctf = rasterio.transform.from_origin(x0, y1, RES_CANVAS, RES_CANVAS)
-    log(f"  canvas {n} x {n} at {RES_CANVAS} m around ({cx:.0f}, {cy:.0f}) EPSG:32118")
+    log(f"  canvas {n} x {n} at {RES_CANVAS} m around ({cx:.0f}, {cy:.0f}) {crs}")
 
     # Where the heat grid sits on the canvas (same 2 m pixels, offset by a shift).
     hc0 = (t.c - x0) / RES_CANVAS
@@ -121,38 +156,44 @@ def build_canvas(log=print):
     canopy = paste(layers["cdsm"], 0.0)
     lidar = paste(~masks["nodata"], False).astype(bool) & inside
     hbld = {s: paste(np.where(masks["building"], layers[f"dsm_{s}"] - layers["dem"], 0.0), 0.0)
-            for s in ("2017", "today")}
+            for s in (before, "today")}
 
-    # Footprint prisms for everything the survey did not measure.
-    to_ll = Transformer.from_crs("EPSG:32118", "EPSG:4326", always_xy=True).transform
-    to_m = Transformer.from_crs("EPSG:4326", "EPSG:32118", always_xy=True).transform
-    lons, lats = to_ll([x0, x0 + n * RES_CANVAS], [y1 - n * RES_CANVAS, y1])
-    recs = NF.read(FOOTPRINTS, bbox_lonlat=(min(lons), min(lats), max(lons), max(lats)), log=log)
-    recs = [r for r in recs if r["height_m"]]
-    polys = [shp_tf(to_m, r["poly"]) for r in recs]
-    lab = features.rasterize([(p, i + 1) for i, p in enumerate(polys)], out_shape=(n, n),
-                             transform=ctf, fill=0, dtype="int32")
-    hts = np.array([0.0] + [r["height_m"] for r in recs], np.float32)
-    yrs = np.array([0] + [r["year"] or 0 for r in recs], np.int32)
-    prism_today = hts[lab]
-    prism_2017 = np.where((yrs[lab] > 0) & (yrs[lab] < SURVEY_YEAR), prism_today, 0.0)
-    # A building with no year is kept in 2017: almost all of them are old.
-    prism_2017 = np.where((lab > 0) & (yrs[lab] == 0), prism_today, prism_2017)
+    if not nyc:
+        prism_today, prism_2017, n_fp = city_prisms(n, ctf, crs, log=log)
+    else:
+        # Footprint prisms for everything the survey did not measure.
+        to_ll = Transformer.from_crs("EPSG:32118", "EPSG:4326", always_xy=True).transform
+        to_m = Transformer.from_crs("EPSG:4326", "EPSG:32118", always_xy=True).transform
+        lons, lats = to_ll([x0, x0 + n * RES_CANVAS], [y1 - n * RES_CANVAS, y1])
+        recs = NF.read(FOOTPRINTS, bbox_lonlat=(min(lons), min(lats), max(lons), max(lats)), log=log)
+        recs = [r for r in recs if r["height_m"]]
+        polys = [shp_tf(to_m, r["poly"]) for r in recs]
+        lab = features.rasterize([(p, i + 1) for i, p in enumerate(polys)], out_shape=(n, n),
+                                 transform=ctf, fill=0, dtype="int32")
+        hts = np.array([0.0] + [r["height_m"] for r in recs], np.float32)
+        yrs = np.array([0] + [r["year"] or 0 for r in recs], np.int32)
+        prism_today = hts[lab]
+        prism_2017 = np.where((yrs[lab] > 0) & (yrs[lab] < SURVEY_YEAR), prism_today, 0.0)
+        # A building with no year is kept in 2017: almost all of them are old.
+        prism_2017 = np.where((lab > 0) & (yrs[lab] == 0), prism_today, prism_2017)
+        n_fp = len(recs)
     hb = {"today": np.where(lidar, hbld["today"], prism_today),
-          "2017": np.where(lidar, hbld["2017"], prism_2017)}
+          before: np.where(lidar, hbld[before], prism_2017)}
     out = {"ground": ground.astype(np.float32), "canopy": canopy.astype(np.float32),
-           "b_today": hb["today"].astype(np.float32), "b_2017": hb["2017"].astype(np.float32),
+           "b_today": hb["today"].astype(np.float32), f"b_{before}": hb[before].astype(np.float32),
            "lidar": lidar, "heat": inside}
     os.makedirs(WIND_DIR, exist_ok=True)
-    info = {"crs": "EPSG:32118", "res_m": RES_CANVAS, "x0": x0, "y1": y1, "n": n,
+    info = {"crs": crs, "res_m": RES_CANVAS, "x0": x0, "y1": y1, "n": n,
             "roi_centre": [cx, cy], "heat_offset_rc": [hr0, hc0], "heat_shape": [H, W],
-            "footprints": len(recs), "avenue_axis": meta["avenue_axis"],
+            "footprints": n_fp, "avenue_axis": meta.get("avenue_axis"),
             "site": meta["site"]}
-    np.savez_compressed(CANVAS, **out)
-    with open(CANVAS.replace(".npz", ".json"), "w", encoding="utf-8", newline="\n") as f:
+    dst = out_path or CANVAS
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    np.savez_compressed(dst, **out)
+    with open(dst.replace(".npz", ".json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(info, f, indent=1)
-    log(f"  canvas written: {len(recs):,} footprints, tallest {max(hb['today'].max(), 0):.0f} m today, "
-        f"{hb['2017'].max():.0f} m in 2017, LiDAR on {lidar.mean() * 100:.0f}% of it")
+    log(f"  canvas written: {n_fp:,} footprints, tallest {max(hb['today'].max(), 0):.0f} m today, "
+        f"{hb[before].max():.0f} m in {before}, LiDAR on {lidar.mean() * 100:.0f}% of it")
     return out, info
 
 

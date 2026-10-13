@@ -33,6 +33,7 @@ from datetime import datetime
 
 import numpy as np
 
+from . import city as _city
 from .wind_domain import BOX, LAD, WIND_DIR, load_canvas, voxelise
 from .wind_lbm import InflowTurbulence, Solver, power_profile
 
@@ -50,7 +51,12 @@ SAVE_LAYERS_M = 520.0           # keep the 3D mean field up to this height
 # all day; the hero direction is its middle. The library covers the compass in
 # 22.5 degree steps, most frequent winter directions first (Central Park
 # typical year, December to February daytime: W, WNW and NW are 42% of hours).
-HERO = 315.0
+HERO = float(_city.get("wind.hero_dir", 315.0))
+# A second pair for the residents' story where the heat day's wind is not the
+# usual one (Rotterdam: the clear December day blows from the south-east, the
+# winter wind is mostly south-west).
+STORY = _city.get("wind.story_dir")
+BEFORE = _city.before()
 LIBRARY = [292.5, 337.5, 270.0, 0.0, 247.5, 22.5, 225.0, 45.0, 202.5, 67.5, 180.0, 90.0,
            157.5, 112.5, 135.0]
 SMALL_BOX = {"length_m": 2600.0, "width_m": 2400.0, "height_m": 720.0, "roi_from_inlet_m": 1400.0}
@@ -163,16 +169,19 @@ def queue(name):
     nw = [292.5, 337.5, 270.0]
     rest = [d for d in LIBRARY if d not in nw]
     q = {
-        "hero": [("2017", HERO, 8.0, BOX, "", "dec", AVERAGE_HERO),
+        "hero": [(BEFORE, HERO, 8.0, BOX, "", "dec", AVERAGE_HERO),
                  ("today", HERO, 8.0, BOX, "", "dec", AVERAGE_HERO)],
         "today-nw": [("today", d, 8.0, BOX, "", "dec", AVERAGE) for d in nw],
         "grid": [("today", HERO, 8.0, SMALL_BOX, "_small", "dec", AVERAGE_HERO),
                  ("today", HERO, 6.0, SMALL_BOX, "_small", "dec", AVERAGE_HERO)],
         "today-rest": [("today", d, 8.0, BOX, "", "dec", AVERAGE) for d in rest],
         # The June control day blows from 250 to 270 degrees; trees in leaf.
-        "june": [(sc, d, 8.0, BOX, "", "jun", AVERAGE) for d in (247.5, 270.0) for sc in ("today", "2017")],
-        "2017-lib": [("2017", d, 8.0, BOX, "", "dec", AVERAGE) for d in LIBRARY],
+        "june": [(sc, d, 8.0, BOX, "", "jun", AVERAGE) for d in (247.5, 270.0) for sc in ("today", BEFORE)],
+        "2017-lib": [(BEFORE, d, 8.0, BOX, "", "dec", AVERAGE) for d in LIBRARY],
     }
+    if STORY is not None:
+        q["story"] = [(BEFORE, float(STORY), 8.0, BOX, "", "dec", AVERAGE_HERO),
+                      ("today", float(STORY), 8.0, BOX, "", "dec", AVERAGE_HERO)]
     if name == "all":
         return [j for k in ("hero", "grid", "today-nw", "june", "today-rest", "2017-lib") for j in q[k]]
     if name not in q:
@@ -182,7 +191,7 @@ def queue(name):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--scenario", choices=("2017", "today"))
+    ap.add_argument("--scenario", choices=_city.scenarios())
     ap.add_argument("--dir", type=float, nargs="*")
     ap.add_argument("--res", type=float, default=8.0)
     ap.add_argument("--season", default="dec", choices=("dec", "jun"))
