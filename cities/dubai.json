@@ -3,33 +3,100 @@
  "name": "Downtown Dubai",
  "builder": "vector_parts",
  "status": "prepared on open data; waits for official 3D buildings from Dubai Municipality (GeoDubai)",
- "paths": {"heat": "data/cities/dubai/heat", "wind": "data/cities/dubai/wind",
-           "data": "data/cities/dubai", "viewer": "viewer/cities/dubai"},
+ "paths": {
+  "heat": "data/cities/dubai/heat",
+  "wind": "data/cities/dubai/wind",
+  "data": "data/cities/dubai",
+  "viewer": "viewer/cities/dubai"
+ },
  "crs": "EPSG:32640",
  "crs_geotiff": "EPSG:32640",
  "utc_offset": 4.0,
  "clock_name": "GST",
- "scenarios": ["today"],
+ "scenarios": [
+  "today"
+ ],
  "res_m": 2.0,
- "weather": {"epw": "data/cities/dubai/weather/ARE_DU_Dubai.Intl.AP.411940_TMYx.2011-2025.epw",
-             "source_url": "https://climate.onebuilding.org/WMO_Region_2_Asia/ARE_United_Arab_Emirates/ARE_DU_Dubai.Intl.AP.411940_TMYx.2011-2025.zip",
-             "station": "Dubai International Airport, WMO 411940, TMYx 2011-2025"},
- "analysis": {"rule": "ceqr", "days": ["dec", "mar", "may", "jun"]},
- "study": {"bbox_lonlat": [55.262, 25.185, 55.288, 25.205],
-           "label": "Downtown Dubai: Burj Khalifa, The Dubai Mall, the Boulevard"},
- "focus": {"name": "Burj Khalifa", "lonlat": [55.27439, 25.19720], "height_m": 828.0},
- "sources": {
-   "buildings": {"kind": "overture", "release": "2026-09-23.1",
-                 "buildings": "data/cities/dubai/overture/building.gpkg",
-                 "parts": "data/cities/dubai/overture/building_part.gpkg",
-                 "credit": "Overture Maps Foundation buildings (ODbL), OpenStreetMap contributors",
-                 "official_later": "Dubai Digital Twin 3D buildings via GeoDubai, when granted"},
-   "dem": {"kind": "copernicus_glo30", "paths": ["data/cities/dubai/dem/Copernicus_DSM_COG_10_N25_00_E055_00_DEM.tif"],
-           "credit": "Copernicus DEM GLO-30, ESA and Airbus, buildings removed here"},
-   "canopy": {"kind": "meta_chm_v2", "paths": ["data/cities/dubai/canopy/1230231303.tif", "data/cities/dubai/canopy/1230231321.tif"],
-              "credit": "Meta and World Resources Institute, Global Canopy Height v2 (CC BY 4.0)"}
+ "weather": {
+  "epw": "data/cities/dubai/weather/ARE_DU_Dubai.Intl.AP.411940_TMYx.2011-2025.epw",
+  "source_url": "https://climate.onebuilding.org/WMO_Region_2_Asia/ARE_United_Arab_Emirates/ARE_DU_Dubai.Intl.AP.411940_TMYx.2011-2025.zip",
+  "station": "Dubai International Airport, WMO 411940, TMYx 2011-2025"
  },
- "heat": {"near_m": 500.0, "tall_m": 100.0, "margin_m": 300.0, "south_reach_m": 3000.0},
- "verify": {"v0_tower_m": 828.0, "v0_lat": 25.197, "v0_lon": 55.274},
- "wind": {"reference": {"kind": "open ground upwind", "spot_lonlat": [55.2655, 25.1905], "spot_name": "Burj Park"}}
+ "analysis": {
+  "rule": "ceqr",
+  "days": [
+   "dec",
+   "mar",
+   "may",
+   "jun"
+  ]
+ },
+ "study": {
+  "bbox_lonlat": [
+   55.262,
+   25.185,
+   55.288,
+   25.205
+  ],
+  "label": "Downtown Dubai: Burj Khalifa, The Dubai Mall, the Boulevard"
+ },
+ "focus": {
+  "name": "Burj Khalifa",
+  "lonlat": [
+   55.27439,
+   25.1972
+  ],
+  "height_m": 828.0
+ },
+ "sources": {
+  "buildings": {
+   "kind": "overture",
+   "release": "2026-09-23.1",
+   "buildings": "data/cities/dubai/overture/building.gpkg",
+   "parts": "data/cities/dubai/overture/building_part.gpkg",
+   "credit": "Overture Maps Foundation buildings (ODbL), OpenStreetMap contributors",
+   "official_later": "Dubai Digital Twin 3D buildings via GeoDubai, when granted"
+  },
+  "dem": {
+   "kind": "copernicus_glo30",
+   "paths": [
+    "data/cities/dubai/dem/Copernicus_DSM_COG_10_N25_00_E055_00_DEM.tif"
+   ],
+   "credit": "Copernicus DEM GLO-30, ESA and Airbus, buildings removed here"
+  },
+  "canopy": {
+   "kind": "meta_chm_v2",
+   "paths": [
+    "data/cities/dubai/canopy/1230231303.tif",
+    "data/cities/dubai/canopy/1230231321.tif"
+   ],
+   "credit": "Meta and World Resources Institute, Global Canopy Height v2 (CC BY 4.0)"
+  },
+  "water": {
+   "kind": "overture_water",
+   "path": "data/cities/dubai/overture/water.gpkg",
+   "credit": "Overture Maps Foundation base water (ODbL), OpenStreetMap contributors"
+  }
+ },
+ "heat": {
+  "near_m": 500.0,
+  "tall_m": 100.0,
+  "margin_m": 300.0,
+  "south_reach_m": 3000.0
+ },
+ "verify": {
+  "v0_tower_m": 828.0,
+  "v0_lat": 25.197,
+  "v0_lon": 55.274
+ },
+ "wind": {
+  "reference": {
+   "kind": "open ground upwind",
+   "spot_lonlat": [
+    55.2655,
+    25.1905
+   ],
+   "spot_name": "Burj Park"
+  }
+ }
 }
