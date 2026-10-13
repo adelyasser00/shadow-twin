@@ -36,3 +36,6 @@ tools/CLAUDE_CODE.md
 deploy/
 viewer/preview.png
 viewer/data-*.json
+
+# Viewer builds for other cities (cities/<id>.json, paths.viewer)
+viewer/cities/

@@ -1,0 +1,137 @@
+{
+ "id": "rotterdam",
+ "name": "Zalmhaven and the Scheepvaartkwartier, Rotterdam",
+ "builder": "survey_grown",
+ "paths": {
+  "heat": "data/cities/rotterdam/heat",
+  "wind": "data/cities/rotterdam/wind",
+  "data": "data/cities/rotterdam",
+  "viewer": "viewer/cities/rotterdam"
+ },
+ "crs": "EPSG:28992",
+ "crs_geotiff": "EPSG:28992",
+ "utc_offset": 1.0,
+ "clock_name": "CET",
+ "scenarios": [
+  "2016",
+  "today"
+ ],
+ "survey_year": 2016,
+ "today_label": "2023",
+ "res_m": 2.0,
+ "weather": {
+  "epw": "data/cities/rotterdam/weather/NLD_ZH_Rotterdam.The.Hague.AP.063440_TMYx.2011-2025.epw",
+  "source_url": "https://climate.onebuilding.org/WMO_Region_6_Europe/NLD_Netherlands/ZH_Zuid-Holland/NLD_ZH_Rotterdam.The.Hague.AP.063440_TMYx.2011-2025.zip",
+  "station": "Rotterdam The Hague Airport, WMO 063440, TMYx 2011-2025"
+ },
+ "analysis": {
+  "rule": "ceqr",
+  "days": [
+   "dec",
+   "feb",
+   "mar",
+   "may",
+   "jun"
+  ],
+  "extra_days": {
+   "feb": {
+    "label": "19 February / 21 October",
+    "short": "Feb 19",
+    "date": "2026-02-19",
+    "why": "reference day of the Dutch 'lichte TNO-norm' for sunlight on homes"
+   }
+  }
+ },
+ "study": {
+  "polygons": "data/cities/rotterdam/cbs/buurten.json",
+  "name_field": "buurtnaam",
+  "names": [
+   "Nieuwe Werk",
+   "Dijkzigt",
+   "Cool",
+   "Oude Westen",
+   "Stadsdriehoek"
+  ],
+  "label": "the neighbourhoods around Zalmhaven",
+  "within_m_of_grown": 1000.0,
+  "grown_min_m": 70.0
+ },
+ "focus": {
+  "name": "Zalmhaven",
+  "lonlat": [
+   4.48075,
+   51.91028
+  ],
+  "height_m": 215.0
+ },
+ "sources": {
+  "buildings": {
+   "kind": "3dbag",
+   "tiles": "data/cities/rotterdam/3dbag/tiles",
+   "version": "v20250903",
+   "credit": "3DBAG by the 3D geoinformation group, TU Delft (CC BY 4.0), from BAG and AHN"
+  },
+  "survey_before": {
+   "kind": "dsm_tif",
+   "dsm": [
+    "data/cities/rotterdam/ahn3/R_37HN1.TIF",
+    "data/cities/rotterdam/ahn3/R_37FZ1.TIF"
+   ],
+   "dtm": [
+    "data/cities/rotterdam/ahn3/M_37HN1.TIF",
+    "data/cities/rotterdam/ahn3/M_37FZ1.TIF"
+   ],
+   "credit": "AHN3, Actueel Hoogtebestand Nederland (CC0), 0.5 m DSM and DTM, flown 2014-2016"
+  },
+  "survey_today": {
+   "kind": "dsm_tif",
+   "dsm": [
+    "/vsicurl/https://basisdata.nl/hwh-ahn/AHN5/03a_DSM_50cm/2023_R_37HN1.TIF",
+    "/vsicurl/https://basisdata.nl/hwh-ahn/AHN5/03a_DSM_50cm/2023_R_37FZ1.TIF",
+    "/vsicurl/https://basisdata.nl/hwh-ahn/AHN5/03a_DSM_50cm/2023_R_37GN2.TIF",
+    "/vsicurl/https://basisdata.nl/hwh-ahn/AHN5/03a_DSM_50cm/2023_R_37HN2.TIF",
+    "/vsicurl/https://basisdata.nl/hwh-ahn/AHN5/03a_DSM_50cm/2023_R_37EZ2.TIF",
+    "/vsicurl/https://basisdata.nl/hwh-ahn/AHN5/03a_DSM_50cm/2023_R_37FZ2.TIF"
+   ],
+   "cache": "data/cities/rotterdam/ahn5",
+   "credit": "AHN5 2023, Het Waterschapshuis (CC BY 4.0), 0.5 m DSM"
+  },
+  "green": {
+   "kind": "bgt",
+   "path": "data/cities/rotterdam/bgt/begroeid.geojson",
+   "credit": "BGT, Basisregistratie Grootschalige Topografie (CC BY 4.0), via PDOK"
+  },
+  "water": {
+   "kind": "bgt",
+   "path": "data/cities/rotterdam/bgt/water.geojson"
+  },
+  "study": {
+   "credit": "CBS Wijk- en Buurtkaart 2024 (CC BY 4.0), via PDOK"
+  }
+ },
+ "heat": {
+  "near_m": 500.0,
+  "tall_m": 70.0,
+  "margin_m": 300.0,
+  "south_reach_m": 3000.0
+ },
+ "verify": {
+  "v0_tower_m": 215.0,
+  "v0_lat": 51.91,
+  "v0_lon": 4.48
+ },
+ "wind": {
+  "reference": {
+   "kind": "open lawns of Het Park",
+   "park_name": "Het Park",
+   "spot_lonlat": [
+    4.466,
+    51.9065
+   ],
+   "spot_name": "Het Park"
+  },
+  "hero_dir": 135.0,
+  "story_dir": 247.5,
+  "note": "hero: the clear December heat day (15 Dec, TMYx) blows from 130 to 150 deg in the window; story: south-west, the most frequent winter daytime sector (W, SW, S are 58% of hours)"
+ }
+}
