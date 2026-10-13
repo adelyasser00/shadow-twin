@@ -140,7 +140,7 @@ def main():
     fsl = grid.frame_slice
     idx, bounds = grid.northup_index()
     painter = export.Painter(idx, bounds)
-    to_ll = Transformer.from_crs("EPSG:2263", "EPSG:4326", always_xy=True).transform
+    to_ll = Transformer.from_crs(grid.crs, "EPSG:4326", always_xy=True).transform
     bmask = masks["building"][fsl]
     felt_cols, chg_cols = felt_palette(), change_palette()
     runs = runs_available()
