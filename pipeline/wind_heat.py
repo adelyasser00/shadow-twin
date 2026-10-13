@@ -113,6 +113,11 @@ def reconcile(k17, know, masks):
     r = know / np.maximum(k17, 0.02) - 1.0
     rq = r[quiet & np.isfinite(r)]
     noise = float(np.std(rq)) if rq.size else 0.0
+    if not NYC:
+        # Quiet ground upwind of every change gives two identical runs and no
+        # noise at all; floor it at New York's (its 35% street bar is three
+        # of these). See NL_NOTES.md D14.
+        noise = max(noise, 0.35 / NOISE_SIGMAS)
     keep = np.abs(r) > NOISE_SIGMAS * noise
     mean = 0.5 * (k17 + know)
     return np.where(keep, k17, mean), np.where(keep, know, mean), noise
