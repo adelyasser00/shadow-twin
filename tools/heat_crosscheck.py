@@ -31,15 +31,26 @@ import numpy as np
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
+from pipeline import city as _city                         # noqa: E402
 from pipeline.heat_inputs import HEAT_DIR                  # noqa: E402
 from pipeline.heat_inputs import INPUTS_DIR as H_INPUTS    # noqa: E402
 from pipeline.verify_heat import save_gate, line           # noqa: E402
 
 TILE = 300
+BEFORE = _city.before()
+UTC = _city.utc_offset()
+CLOCK = _city.clock_name()
+CRS_M = _city.get("crs_geotiff", "EPSG:32118")
 V3_RMSE_MAX = 1.0
 
 
 V3_STEPS = ("10:00", "12:00", "14:00")      # file times; sun at 09:30, 11:30, 13:30 EST
+if _city.city_id() != "nyc":
+    # The first, middle and last reported hour of the city's December day.
+    import json as _json
+    with open(os.path.join(HEAT_DIR, "weather", "days.json"), encoding="utf-8") as _f:
+        _rep = _json.load(_f)["seasons"]["dec"]["report_timestamps"]
+    V3_STEPS = (_rep[0], _rep[len(_rep) // 2], _rep[-1])
 
 
 def write_umep_met(path, weather):
@@ -148,7 +159,7 @@ def v3():
     bbox = [b.left, b.bottom, b.right, b.top]
     ground = lc != 2
     tm = {}
-    for sc in ("2017", "today"):
+    for sc in (BEFORE, "today"):
         dsm = os.path.join(tile_dir, f"dsm_{sc}.tif")
         d = os.path.join(work, sc)
         done = all(os.path.exists(os.path.join(d, *p)) and
@@ -174,7 +185,7 @@ def v3():
                "lc_path": os.path.join(tile_dir, "landcover.tif"),
                "aniso_path": os.path.join(d, "svf", "shadowmats.npz"),
                "only_global": 0, "use_veg_dem": 1, "conifer": 0, "person_cylinder": 1,
-               "utc": -5, "use_landcover": 1, "use_dem_for_buildings": 0, "use_aniso": 1,
+               "utc": UTC, "use_landcover": 1, "use_dem_for_buildings": 0, "use_aniso": 1,
                "use_wall_scheme": 0, "wall_type": "Brick", "output_tmrt": 1, "output_kup": 0,
                "output_kdown": 0, "output_lup": 0, "output_ldown": 0, "output_sh": 1,
                "save_buildings": 0, "output_kdiff": 0, "output_tree_planter": 0, "wall_netcdf": 0}
@@ -191,7 +202,7 @@ def v3():
         orig = RH.location
         RH.location = lambda meta=None: solweig.Location(latitude=loc["latitude"],
                                                          longitude=loc["longitude"],
-                                                         altitude=loc["altitude"], utc_offset=-5)
+                                                         altitude=loc["altitude"], utc_offset=UTC)
         try:
             RH.run(sc, "dec", surface=surf, out_dir=sdir, gpu=False, weather=list(wl),
                    prepared_with="cpu", log=lambda s: print(s, flush=True))
@@ -213,13 +224,13 @@ def v3():
     worst = 0.0
     for ts in steps:
         rec = {"file_time": ts.strftime("%H:%M"), "sun_time": f"{ts.hour - 1:02d}:30"}
-        for sc in ("2017", "today"):
+        for sc in (BEFORE, "today"):
             dd = (tm[("solweig", sc, ts)] - tm[("umep", sc, ts)])[ground]
             dd = dd[np.isfinite(dd)]
             rec[f"bias_{sc}"] = float(dd.mean())
             rec[f"rmse_{sc}"] = float(np.sqrt((dd ** 2).mean()))
-        ds = (tm[("solweig", "today", ts)] - tm[("solweig", "2017", ts)])[ground]
-        du = (tm[("umep", "today", ts)] - tm[("umep", "2017", ts)])[ground]
+        ds = (tm[("solweig", "today", ts)] - tm[("solweig", BEFORE, ts)])[ground]
+        du = (tm[("umep", "today", ts)] - tm[("umep", BEFORE, ts)])[ground]
         ok = np.isfinite(ds) & np.isfinite(du)
         e = ds[ok] - du[ok]
         rec["change_bias"] = float(e.mean())
@@ -228,7 +239,7 @@ def v3():
         rec["cells_change_le_minus2_umep"] = int((du[ok] <= -2).sum())
         worst = max(worst, rec["change_rmse"])
         out["steps"].append(rec)
-        print(f"V3 {rec['sun_time']} EST: Tmrt solweig minus UMEP, bias/RMSE 2017 "
+        print(f"V3 {rec['sun_time']} {CLOCK}: Tmrt solweig minus UMEP, bias/RMSE 2017 "
               f"{rec['bias_2017']:+.2f}/{rec['rmse_2017']:.2f} C, today {rec['bias_today']:+.2f}/"
               f"{rec['rmse_today']:.2f} C; change today - 2017 bias {rec['change_bias']:+.2f}, RMSE "
               f"{rec['change_rmse']:.2f} C; cells >= 2 C colder: solweig "
@@ -253,7 +264,7 @@ def tower_crop(size):
     with open(os.path.join(INPUTS_DIR, "domain.json"), encoding="utf-8") as f:
         meta = json.load(f)
     lon, lat = meta["grown_buildings"][0]["lonlat"]
-    x, y = Transformer.from_crs("EPSG:4326", "EPSG:32118", always_xy=True).transform(lon, lat)
+    x, y = Transformer.from_crs("EPSG:4326", CRS_M, always_xy=True).transform(lon, lat)
     a, b, x0, d, e, y0 = meta["grid"]["transform_m"]
     row, col = int((y - y0) / e), int((x - x0) / a)
     r0 = max(0, min(meta["grid"]["rows"] - size, row - 3 * size // 4))
@@ -268,7 +279,7 @@ def v3b():
     print(f"V3b tile {TILE} x {TILE} at row {r0}, col {c0}, holding the {tower['height_m']} m grown "
           f"tower at {tower['lonlat'][1]:.5f}, {tower['lonlat'][0]:.5f}", flush=True)
     tile_dir = crop_inputs(r0, c0, TILE, os.path.join(HEAT_DIR, "cache", "v3b", "inputs"))
-    with rasterio.open(os.path.join(tile_dir, "dsm_2017.tif")) as a,             rasterio.open(os.path.join(tile_dir, "dsm_today.tif")) as b:
+    with rasterio.open(os.path.join(tile_dir, f"dsm_{BEFORE}.tif")) as a,             rasterio.open(os.path.join(tile_dir, "dsm_today.tif")) as b:
         n_changed = int((a.read(1) != b.read(1)).sum())
     print(f"V3b {n_changed:,} cells of the tile differ between 2017 and today", flush=True)
     if n_changed == 0:
@@ -279,13 +290,13 @@ def v3b():
     wl = [w for w in weather_list("dec") if w.datetime.date().isoformat() == day
           and w.datetime.strftime("%H:%M") in want]
     import shutil
-    for sc in ("2017", "today"):                 # caches are per tile; never reuse
+    for sc in (BEFORE, "today"):                 # caches are per tile; never reuse
         shutil.rmtree(os.path.join(HEAT_DIR, "cache", "v3b", sc), ignore_errors=True)
     surfaces = {sc: prepare(sc, in_dir=tile_dir, cache_dir=os.path.join(HEAT_DIR, "cache", "v3b", sc))[0]
-                for sc in ("2017", "today")}
+                for sc in (BEFORE, "today")}
     tm = {}
     for backend in ("gpu", "cpu"):
-        for sc in ("2017", "today"):
+        for sc in (BEFORE, "today"):
             od = os.path.join(HEAT_DIR, "verify", "v3b", f"{sc}_{backend}")
             m = run(sc, "dec", surface=surfaces[sc], out_dir=od, gpu=(backend == "gpu"),
                     weather=list(wl), log=lambda s: print(s, flush=True))
@@ -302,20 +313,20 @@ def v3b():
     worst = 0.0
     for w in wl:
         rec = {"file_time": w.datetime.strftime("%H:%M")}
-        for sc in ("2017", "today"):
+        for sc in (BEFORE, "today"):
             dd = np.abs(tm[("gpu", sc, w.datetime)] - tm[("cpu", sc, w.datetime)])
             rec[f"max_abs_dtmrt_{sc}"] = float(np.nanmax(dd))
             rec[f"mean_abs_dtmrt_{sc}"] = float(np.nanmean(dd))
             rec[f"share_cells_over_1c_{sc}"] = float((dd > 1.0).mean())
             worst = max(worst, rec[f"max_abs_dtmrt_{sc}"])
-        dg = tm[("gpu", "today", w.datetime)] - tm[("gpu", "2017", w.datetime)]
-        dc = tm[("cpu", "today", w.datetime)] - tm[("cpu", "2017", w.datetime)]
+        dg = tm[("gpu", "today", w.datetime)] - tm[("gpu", BEFORE, w.datetime)]
+        dc = tm[("cpu", "today", w.datetime)] - tm[("cpu", BEFORE, w.datetime)]
         rec["max_abs_diff_of_change"] = float(np.nanmax(np.abs(dg - dc)))
         rec["rmse_of_change"] = float(np.sqrt(np.nanmean((dg - dc) ** 2)))
         rec["change_cells_gpu_le_minus2"] = int((dg <= -2).sum())
         rec["change_cells_cpu_le_minus2"] = int((dc <= -2).sum())
         out["steps"].append(rec)
-        print(f"V3b {rec['file_time']} (sun {int(rec['file_time'][:2]) - 1}:30 EST): max |GPU - CPU| Tmrt "
+        print(f"V3b {rec['file_time']} (sun {int(rec['file_time'][:2]) - 1}:30 {CLOCK}): max |GPU - CPU| Tmrt "
               f"2017 {rec['max_abs_dtmrt_2017']:.4f} C, today {rec['max_abs_dtmrt_today']:.4f} C; "
               f"change today - 2017 differs by at most {rec['max_abs_diff_of_change']:.4f} C "
               f"(RMSE {rec['rmse_of_change']:.4f}); cells with Tmrt change <= -2 C: GPU "

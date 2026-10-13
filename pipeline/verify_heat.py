@@ -41,7 +41,16 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
+from . import city as _city
 from .heat_inputs import HEAT_DIR, INPUTS_DIR
+
+# The city's clock and synthetic tower. New York: EST, a 470 m tower at 40.77 N.
+UTC = _city.utc_offset()
+CLOCK = _city.clock_name()
+BEFORE = _city.before()
+V0_TOWER_M = float(_city.get("verify.v0_tower_m", 470.0))
+V0_LAT = float(_city.get("verify.v0_lat", 40.77))
+V0_LON = float(_city.get("verify.v0_lon", -73.97))
 
 VERIFY_DIR = os.path.join(HEAT_DIR, "verify")
 GATES_JSON = os.path.join(VERIFY_DIR, "gates.json")
@@ -95,10 +104,10 @@ def v0():
     px, n = 2.0, 1000
     dsm = np.full((n, n), 10.0, dtype=np.float32)
     rc, cc = 900, 120
-    dsm[rc - 5:rc + 5, cc - 5:cc + 5] = 10.0 + 470.0
+    dsm[rc - 5:rc + 5, cc - 5:cc + 5] = 10.0 + V0_TOWER_M
     dem = np.full((n, n), 10.0, dtype=np.float32)
     surface = solweig.SurfaceData.prepare(dsm=dsm, dem=dem, pixel_size=px)
-    loc = solweig.Location(latitude=40.77, longitude=-73.97, utc_offset=-5)
+    loc = solweig.Location(latitude=V0_LAT, longitude=V0_LON, utc_offset=UTC)
 
     def reach(max_dist):
         w = solweig.Weather(datetime=datetime(2026, 12, 21, 15, 0), ta=0.0, rh=50.0,
@@ -119,12 +128,12 @@ def v0():
         return float(proj.max()) if proj.size else 0.0, w.sun_altitude, w.sun_azimuth
 
     r35, alt, az = reach(MAX_SHADOW_M)
-    expect = 470.0 / math.tan(math.radians(alt))
+    expect = V0_TOWER_M / math.tan(math.radians(alt))
     err = abs(r35 - expect) / expect
     r10, _, _ = reach(None)
     ok = line(err <= V0_REACH_TOL,
-              f"V0 470 m tower, sun {alt:.2f} deg up at {az:.1f} deg (14:30 EST, 21 Dec): "
-              f"reach {r35:.0f} m vs 470/tan(alt) = {expect:.0f} m, error {err*100:.1f}% "
+              f"V0 {V0_TOWER_M:.0f} m tower, sun {alt:.2f} deg up at {az:.1f} deg (14:30 {CLOCK}, 21 Dec): "
+              f"reach {r35:.0f} m vs {V0_TOWER_M:.0f}/tan(alt) = {expect:.0f} m, error {err*100:.1f}% "
               f"(limit {V0_REACH_TOL*100:.0f}%); package default 1000 m gives {r10:.0f} m")
     out["tower"] = {"sun_altitude": alt, "sun_azimuth": az, "reach_m": r35, "expected_m": expect,
                     "error": err, "reach_default_m": r10, "pass": ok}
@@ -144,7 +153,8 @@ def v0():
     for nm, ok, det in H.check_invariants(layers, masks, abs(meta["_transform"].a)):
         ok_all &= line(ok, f"V0 input: {nm}  {det}")
         out["checks"].append({"check": nm, "pass": bool(ok), "detail": det})
-    ok = line(str(meta["_crs"]).upper().endswith("32118") and abs(meta["_transform"].a - 2.0) < 1e-9,
+    want_crs = _city.get("crs_geotiff", "EPSG:32118").split(":")[-1]
+    ok = line(str(meta["_crs"]).upper().endswith(want_crs) and abs(meta["_transform"].a - 2.0) < 1e-9,
               f"V0 input GeoTIFFs in {meta['_crs']} with a {meta['_transform'].a} m pixel")
     ok_all &= ok
 
@@ -153,7 +163,7 @@ def v0():
     for suffix in ("", "_cpu"):
         same = {}
         for name in ("dem", "cdsm", "land_cover"):
-            a = os.path.join(HEAT_DIR, "cache", "2017" + suffix, "cleaned", f"{name}.npy")
+            a = os.path.join(HEAT_DIR, "cache", BEFORE + suffix, "cleaned", f"{name}.npy")
             b = os.path.join(HEAT_DIR, "cache", "today" + suffix, "cleaned", f"{name}.npy")
             if os.path.exists(a) and os.path.exists(b):
                 x, y = np.load(a, mmap_mode="r"), np.load(b, mmap_mode="r")
@@ -164,7 +174,7 @@ def v0():
         ok_all &= line(ok, f"V0 SOLWEIG cleaned DEM, CDSM, land cover identical across scenarios "
                            f"(cache{suffix or ' gpu'}): {same}")
         out["cleaned_identical"][suffix or "gpu"] = same
-        for sc in ("2017", "today"):
+        for sc in (BEFORE, "today"):
             md = os.path.join(HEAT_DIR, "cache", sc + suffix, "metadata.json")
             if os.path.exists(md):
                 with open(md, encoding="utf-8") as f:
@@ -194,7 +204,7 @@ def v1():
     if dsm.shape != layers["dem"].shape:
         raise SystemExit(f"SOLWEIG changed the grid: {dsm.shape} vs {layers['dem'].shape}")
     lat, lon = meta["site"]["lat"], meta["site"]["lon"]
-    loc = solweig.Location(latitude=lat, longitude=lon, utc_offset=-5)
+    loc = solweig.Location(latitude=lat, longitude=lon, utc_offset=UTC)
     times = [10, 12, 14]
     ws = [solweig.Weather(datetime=datetime(2026, 12, 21, h, 30), ta=0.0, rh=50.0,
                           global_rad=300.0, timestep_minutes=60.0) for h in times]
@@ -211,7 +221,7 @@ def v1():
     ok_all = True
     for h, w in zip(times, ws):
         w.compute_derived(loc)
-        utc = datetime(2026, 12, 21, h, 0) + timedelta(hours=5)
+        utc = datetime(2026, 12, 21, h, 0) - timedelta(hours=UTC)
         p = sun_position(utc.replace(tzinfo=timezone.utc), lat, lon)
         with rasterio.open(os.path.join(od, "shadow", f"shadow_20261221_{h:02d}30.tif")) as src:
             s_sol = src.read(1) < 0.5
@@ -221,7 +231,7 @@ def v1():
         area = abs(a_s - a_p) / a_p
         agree_w = float((s_sol == s_pip)[win].mean())
         ok = agree >= V1_AGREE_MIN and area <= V1_AREA_TOL
-        ok_all &= line(ok, f"V1 {h:02d}:00 EST  sun solweig {w.sun_altitude:.3f}/{w.sun_azimuth:.3f}, "
+        ok_all &= line(ok, f"V1 {h:02d}:00 {CLOCK}  sun solweig {w.sun_altitude:.3f}/{w.sun_azimuth:.3f}, "
                            f"solar.py {p.altitude:.3f}/{p.azimuth:.3f} deg; agreement {agree*100:.2f}% "
                            f"(window {agree_w*100:.2f}%), shaded {a_s*4/1e4:.1f} vs {a_p*4/1e4:.1f} ha, "
                            f"area diff {area*100:.2f}%")
@@ -270,7 +280,7 @@ def v2():
     day = datetime.fromisoformat(d["chosen"]["date"])
     # The report step whose sun time is closest to solar noon.
     def alt_at(t):
-        return sun_position((t + timedelta(hours=5)).replace(tzinfo=timezone.utc), lat, lon).altitude
+        return sun_position((t - timedelta(hours=UTC)).replace(tzinfo=timezone.utc), lat, lon).altitude
     noon = max((day.replace(hour=11) + timedelta(minutes=m) for m in range(0, 121)), key=alt_at)
     best = min(report_steps("dec"), key=lambda ts: abs((ts - timedelta(minutes=30) - noon).total_seconds()))
     lawn = (layers["landcover"] == 5) & (layers["cdsm"] == 0) & masks["report"]
@@ -289,7 +299,7 @@ def v2():
     strict1 = V2_TMRT[0] <= d_t <= V2_TMRT[1]
     strict2 = V2_UTCI[0] <= d_u <= V2_UTCI[1]
     ok1 = line(V2_TMRT[0] - V2_TOL <= d_t <= V2_TMRT[1] + V2_TOL,
-               f"V2 {out['sun_time']} EST open lawn, sun vs building shadow: Tmrt {out['tmrt_sun']:.1f} vs "
+               f"V2 {out['sun_time']} {CLOCK} open lawn, sun vs building shadow: Tmrt {out['tmrt_sun']:.1f} vs "
                f"{out['tmrt_shade']:.1f} C, difference {d_t:.1f} C (range {V2_TMRT[0]:.0f} to "
                f"{V2_TMRT[1]:.0f}, +/-{V2_TOL:.0f}; strict {'pass' if strict1 else 'fail'}); "
                f"{out['lawn_sun_ha']:.1f} ha sunlit, {out['lawn_shade_ha']:.1f} ha shaded")
@@ -309,7 +319,7 @@ def v2():
     for h in range(1, 8):
         ts = day.replace(hour=h)
         st = ts - timedelta(minutes=30)
-        p = sun_position((st + timedelta(hours=5)).replace(tzinfo=timezone.utc), lat, lon)
+        p = sun_position((st - timedelta(hours=UTC)).replace(tzinfo=timezone.utc), lat, lon)
         if p.altitude >= 0:
             continue
         tm_n = read_step("today", "dec", "tmrt", ts)
@@ -334,8 +344,8 @@ def v2b():
     rep = masks["report"]
     du, dt = [], []
     for ts in report_steps("jun"):
-        du.append((read_step("today", "jun", "utci", ts) - read_step("2017", "jun", "utci", ts))[rep])
-        dt.append((read_step("today", "jun", "tmrt", ts) - read_step("2017", "jun", "tmrt", ts))[rep])
+        du.append((read_step("today", "jun", "utci", ts) - read_step(BEFORE, "jun", "utci", ts))[rep])
+        dt.append((read_step("today", "jun", "tmrt", ts) - read_step(BEFORE, "jun", "tmrt", ts))[rep])
     du, dt = np.concatenate(du), np.concatenate(dt)
     pu = np.nanpercentile(du, [1, 50, 99])
     pt = np.nanpercentile(dt, [1, 50, 99])
@@ -343,7 +353,7 @@ def v2b():
            "share_abs_dutci_ge_2": float((np.abs(du) >= 2).mean()),
            "share_dutci_le_minus2": float((du <= -2).mean())}
     ok = abs(pu[1]) <= V2B_MEDIAN and pu[0] >= V2B_P1_MIN and pu[2] <= V2B_P99_MAX
-    line(ok, f"V2b June today - 2017 over {du.size:,} cell-hours: UTCI p1/p50/p99 "
+    line(ok, f"V2b June today - {BEFORE} over {du.size:,} cell-hours: UTCI p1/p50/p99 "
              f"{pu[0]:+.2f} / {pu[1]:+.2f} / {pu[2]:+.2f} C, Tmrt {pt[0]:+.2f} / {pt[1]:+.2f} / {pt[2]:+.2f} C; "
              f"|dUTCI| >= 2 C on {out['share_abs_dutci_ge_2']*100:.2f}% of cell-hours")
     out["pass"] = bool(ok)

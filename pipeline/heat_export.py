@@ -42,11 +42,14 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 
+from . import city as _city
 from . import export
 from .heat_inputs import HEAT_DIR, INPUTS_DIR, US_FT
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT_DIR = os.path.join(HERE, "viewer", "heat")
+OUT_DIR = os.path.join(_city.viewer_dir(), "heat")       # viewer/heat for New York
+BEFORE = _city.before()
+UTC = _city.utc_offset()
 CELL_HA = 4.0 / 1e4
 SECTION = 5                      # cells per side of a 3D column, 10 m
 COLUMN_MIN = 1.0                 # degrees of change before a column stands
@@ -146,6 +149,12 @@ def heat_grid(meta, masks):
     r1 = min(g["rows"], int(rr.max()) + DISPLAY_PAD)
     c0 = max(0, int(cc.min()) - DISPLAY_PAD)
     c1 = min(g["cols"], int(cc.max()) + DISPLAY_PAD)
+    if "x0_m" in g:
+        # A city from the shared builder: the grid is in metres already.
+        return Grid(crs=g["crs_build"], unit_m=1.0, res_m=g["res_m"], bearing_deg=-g["conv_deg"],
+                    conv_deg=g["conv_deg"], x0=g["x0_m"], y0=g["y0_m"], rows=g["rows"],
+                    cols=g["cols"], frame=(r0, r1, c0, c1),
+                    centre_lat=meta["site"]["lat"], centre_lon=meta["site"]["lon"])
     return Grid(crs="EPSG:2263", unit_m=US_FT, res_m=g["res_m"], bearing_deg=-g["conv_deg"],
                 conv_deg=g["conv_deg"], x0=g["x0_ft"], y0=g["y0_ft"], rows=g["rows"],
                 cols=g["cols"], frame=(r0, r1, c0, c1),
@@ -219,14 +228,15 @@ def really_grew(tower, layers, masks, meta):
     from pyproj import Transformer
     from scipy import ndimage
     t = meta["_transform"]
-    x, y = Transformer.from_crs("EPSG:4326", "EPSG:32118", always_xy=True).transform(*tower["lonlat"])
+    crs_m = _city.get("crs_geotiff", "EPSG:32118")
+    x, y = Transformer.from_crs("EPSG:4326", crs_m, always_xy=True).transform(*tower["lonlat"])
     r, c = int((y - t.f) / t.e), int((x - t.c) / t.a)
     lab, _ = ndimage.label(masks["changed"], structure=np.ones((3, 3)))
     if not lab[r, c]:
         return True
     comp = lab == lab[r, c]
     around = ndimage.binary_dilation(comp, iterations=5)
-    top17 = float((layers["dsm_2017"] - layers["dem"])[around].max())
+    top17 = float((layers[f"dsm_{BEFORE}"] - layers["dem"])[around].max())
     now = float((layers["dsm_today"] - layers["dem"])[comp].max())
     return now - top17 > GREW_M
 
@@ -257,7 +267,7 @@ def main():
     fsl = grid.frame_slice
     idx, bounds = grid.northup_index()
     painter = export.Painter(idx, bounds)
-    to_ll = Transformer.from_crs("EPSG:2263", "EPSG:4326", always_xy=True).transform
+    to_ll = Transformer.from_crs(grid.crs, "EPSG:4326", always_xy=True).transform
     lat, lon = meta["site"]["lat"], meta["site"]["lon"]
     os.makedirs(OUT_DIR, exist_ok=True)
     for f in os.listdir(OUT_DIR):                  # stale images must not survive
@@ -290,8 +300,8 @@ def main():
         for ts in report_steps(season):
             st = ts - timedelta(minutes=30)
             hhmm = st.strftime("%H%M")
-            p = sun_position((st + timedelta(hours=5)).replace(tzinfo=timezone.utc), lat, lon)
-            u17 = read_step("2017", season, "utci", ts)
+            p = sun_position((st - timedelta(hours=UTC)).replace(tzinfo=timezone.utc), lat, lon)
+            u17 = read_step(BEFORE, season, "utci", ts)
             unow = read_step("today", season, "utci", ts)
             du = unow - u17
             img = {

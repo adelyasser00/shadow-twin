@@ -37,6 +37,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
+from pipeline import city as _city                         # noqa: E402
 from pipeline import heat_inputs as H                     # noqa: E402
 from pipeline.run_heat import days                         # noqa: E402
 from pipeline.verify_heat import GATES_JSON, read_step, report_steps, runs_dir  # noqa: E402
@@ -51,6 +52,12 @@ THRESHOLDS = (-2.0, -5.0, -10.0)
 BANDS = ((0, 500), (500, 1000), (1000, 1500))
 CHANGE_MIN = 0.1
 CELL_HA = 4.0 / 1e4
+# New York: bands north of 59th Street. Elsewhere: bands out from the focus tower.
+NYC = _city.city_id() == "nyc"
+BEFORE = _city.before()
+CLOCK = _city.clock_name()
+DIST_KEY = "dist59" if NYC else "dist_focus"
+BAND_WORDS = "north of 59th St" if NYC else f"from {_city.get('focus.name', 'the focus')}"
 
 # Standard UTCI assessment scale (Blazejczyk et al. 2013), lower bounds, C.
 UTCI_EDGES = [-40.0, -27.0, -13.0, 0.0, 9.0, 26.0, 32.0, 38.0, 46.0]
@@ -66,7 +73,7 @@ def category(u):
 
 def season_tables(season, masks, rows, log=print):
     rep = masks["report"]
-    dist = masks["dist59"]
+    dist = masks[DIST_KEY]
     steps = report_steps(season)
     label = {ts: (ts - timedelta(minutes=30)).strftime("%H:%M") for ts in steps}
     du_all, dt_all, cats = [], [], []
@@ -78,9 +85,9 @@ def season_tables(season, masks, rows, log=print):
     import rasterio
     u17_by, unow_by = {}, {}
     for ts in steps:
-        u17 = read_step("2017", season, "utci", ts)
+        u17 = read_step(BEFORE, season, "utci", ts)
         unow = read_step("today", season, "utci", ts)
-        t17 = read_step("2017", season, "tmrt", ts)
+        t17 = read_step(BEFORE, season, "tmrt", ts)
         tnow = read_step("today", season, "tmrt", ts)
         du, dt = unow - u17, tnow - t17
         for nm, arr in (("dutci", du), ("dtmrt", dt)):
@@ -137,9 +144,9 @@ def season_tables(season, masks, rows, log=print):
     with open(os.path.join(out_dir, "summary.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(res, f, indent=1)
 
-    log(f"\n{season}: {res['date']}, reported {res['report_ha']:.1f} ha, hours (sun time EST) "
+    log(f"\n{season}: {res['date']}, reported {res['report_ha']:.1f} ha, hours (sun time {CLOCK}) "
         + ", ".join(res["hours"]))
-    log(f"  UTCI today minus 2017, hectares colder for at least one hour / hectare-hours:")
+    log(f"  UTCI today minus {BEFORE}, hectares colder for at least one hour / hectare-hours:")
     for thr in THRESHOLDS:
         log(f"    <= {thr:+.0f} C   {res[f'ha_any_hour_le_{int(thr)}']:7.2f} ha   "
             f"{res[f'ha_hours_le_{int(thr)}']:8.2f} ha-h")
@@ -149,7 +156,7 @@ def season_tables(season, masks, rows, log=print):
             f"change p1/p5/p50/p95/p99 over those cell-hours {p[0]:+.1f} / {p[1]:+.1f} / "
             f"{p[2]:+.1f} / {p[3]:+.1f} / {p[4]:+.1f} C")
     log(f"  {res['ha_hours_colder_category']:.2f} ha-h moved into a colder UTCI stress category")
-    log(f"  worst hour {res['worst_hour']} EST: {res['worst_hour_ha_le_minus2']:.2f} ha at -2 C or colder")
+    log(f"  worst hour {res['worst_hour']} {CLOCK}: {res['worst_hour_ha_le_minus2']:.2f} ha at -2 C or colder")
     log("  band, m      area     <= -2 C (ha, ha-h)     <= -5 C (ha, ha-h)    <= -10 C (ha, ha-h)   colder cat ha-h")
     for b in res["bands"]:
         log(f"  {b['from_m']:>4}-{b['to_m']:<5} {b['area_ha']:6.1f} ha   "
@@ -264,7 +271,7 @@ def write_numbers(results, extra_rows):
 
     for res in results:
         s = res["season"]
-        scope = f"{s} {res['date']}, report cells, CEQR window {res['hours'][0]}-{res['hours'][-1]} EST"
+        scope = f"{s} {res['date']}, report cells, CEQR window {res['hours'][0]}-{res['hours'][-1]} {CLOCK}"
         add(f"{s}_report_area", res["report_ha"], "ha", scope)
         for thr in THRESHOLDS:
             add(f"{s}_ha_any_hour_dutci_le_{int(thr)}", res[f"ha_any_hour_le_{int(thr)}"], "ha", scope)
@@ -276,10 +283,10 @@ def write_numbers(results, extra_rows):
                 for q, v in zip((1, 5, 50, 95, 99), p):
                     add(f"{s}_{nm}_p{q}_changed", v, "C", scope, "over cell-hours that moved >= 0.1 C")
         add(f"{s}_ha_hours_colder_category", res["ha_hours_colder_category"], "ha-h", scope)
-        add(f"{s}_worst_hour", res["worst_hour"], "EST sun time", scope)
+        add(f"{s}_worst_hour", res["worst_hour"], f"{CLOCK} sun time", scope)
         add(f"{s}_worst_hour_ha_dutci_le_-2", res["worst_hour_ha_le_minus2"], "ha", scope)
         for b in res["bands"]:
-            bs = f"{scope}, {b['from_m']}-{b['to_m']} m north of 59th St"
+            bs = f"{scope}, {b['from_m']}-{b['to_m']} m {BAND_WORDS}"
             add(f"{s}_band{b['from_m']}_area", b["area_ha"], "ha", bs)
             for thr in THRESHOLDS:
                 add(f"{s}_band{b['from_m']}_ha_any_hour_dutci_le_{int(thr)}", b[f"ha_any_hour_le_{int(thr)}"], "ha", bs)
@@ -482,9 +489,16 @@ def main():
     for season in ("dec", "jun"):
         res, u17, unow = season_tables(season, masks, None)
         res["runs_dir"] = runs_dir()
-        res["figures"] = [] if _ALT else figures(res, u17, unow, masks, layers, meta, season)
+        res["figures"] = [] if (_ALT or not NYC) else figures(res, u17, unow, masks, layers, meta, season)
         results.append(res)
-    status, n = write_numbers(results, context_rows())
+    try:
+        extra = context_rows()
+    except (KeyError, TypeError) as e:          # New York's context keys; other cities skip them
+        if NYC:
+            raise
+        print(f"context rows skipped for {_city.city_id()}: {type(e).__name__} {e}")
+        extra = []
+    status, n = write_numbers(results, extra)
     print(f"\nwrote {n} numbers to {NUMBERS_CSV}, all marked {status}")
     return 0
 

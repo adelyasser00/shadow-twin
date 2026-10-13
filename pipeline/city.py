@@ -42,8 +42,10 @@ def config(cid: str | None = None) -> dict:
 
 
 def path(rel: str) -> str:
-    """A path from a config, relative to the repository root."""
-    return rel if os.path.isabs(rel) else os.path.join(HERE, rel)
+    """A path from a config, relative to the repository root. GDAL /vsi paths pass as they are."""
+    if rel.startswith("/vsi"):
+        return rel
+    return os.path.normpath(rel if os.path.isabs(rel) else os.path.join(HERE, rel))
 
 
 def heat_dir(cid: str | None = None) -> str:
