@@ -274,6 +274,26 @@ def towers(min_m=70.0, day="dec", log=print):
         log(f"  {b['height_m']:6.1f} m, built {b['year']}, {b['lonlat'][1]:.5f}, {b['lonlat'][0]:.5f}: "
             f"alone it takes sun from {rec['ha_lost_any']} ha, an hour or more from {rec['ha_lost_1h']} ha, "
             f"all of it from {rec['ha_lost_all']} ha")
+    # The towers together, and every other building that grew (mostly new
+    # mid-rise blocks since 2017), each added on its own to the older city.
+    tall = np.zeros(int(lab.max()) + 1, bool)
+    tall[[r["label"] for r in out]] = True
+    groups = {f"all towers of {min_m:.0f} m or more": raised & tall[lab],
+              f"everything else that grew": raised & ~tall[lab],
+              "all of it (today)": raised}
+    for name, cells in groups.items():
+        s = np.where(cells, now, before).astype(np.float32)
+        sun = run_day(s, grid.res_m, pos, lb, window=grid.frame, bearing_deg=grid.bearing_deg,
+                      compute_svf=False).sun_hours * step_h
+        lost = (base - sun)[report]
+        rec = {"group": name, "day": day, "cells_raised": int(cells.sum()),
+               "buildings": int(len(np.unique(lab[cells]))),
+               "ha_lost_any": round(float((lost >= 0.25).sum() * ha), 2),
+               "ha_lost_1h": round(float((lost >= 1.0).sum() * ha), 2),
+               "ha_lost_all": round(float(((base[report] >= NO_SUN_H) & (sun[report] < NO_SUN_H)).sum() * ha), 2)}
+        out.append(rec)
+        log(f"  {name} ({rec['buildings']} buildings): sun lost on {rec['ha_lost_any']} ha, an hour or more "
+            f"on {rec['ha_lost_1h']} ha, all of it on {rec['ha_lost_all']} ha")
     with open(os.path.join(shade_dir(), f"towers_{day}.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(out, f, indent=1)
     return out
