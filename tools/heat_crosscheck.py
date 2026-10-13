@@ -194,23 +194,37 @@ def v3():
                "save_buildings": 0, "output_kdiff": 0, "output_tree_planter": 0, "wall_netcdf": 0}
         with open(ini, "w", encoding="utf-8", newline="\n") as f:
             f.write("[DEFAULT]\n" + "".join(f"{k}={v}\n" for k, v in cfg.items()))
-        print(f"V3 {sc}: UMEP SOLWEIG, {len(wl)} steps", flush=True)
-        runner = SolweigRunCore(ini, params)
-        runner.run()
-        loc = runner.location
-        print(f"V3 {sc}: solweig on the CPU at {loc['latitude']:.5f}, {loc['longitude']:.5f}, "
-              f"{loc['altitude']:.1f} m", flush=True)
-        surf, _ = RH.prepare(sc, in_dir=tile_dir, cache_dir=os.path.join(HEAT_DIR, "cache", "v3", sc))
         sdir = os.path.join(d, "solweig")
-        orig = RH.location
-        RH.location = lambda meta=None: solweig.Location(latitude=loc["latitude"],
-                                                         longitude=loc["longitude"],
-                                                         altitude=loc["altitude"], utc_offset=UTC)
-        try:
-            RH.run(sc, "dec", surface=surf, out_dir=sdir, gpu=False, weather=list(wl),
-                   prepared_with="cpu", log=lambda s: print(s, flush=True))
-        finally:
-            RH.location = orig
+
+        def have_all():
+            for ts in steps:
+                code = f"{ts.year}_{ts.timetuple().tm_yday}_{ts.hour:02d}{ts.minute:02d}"
+                if not glob.glob(os.path.join(out_dir, f"Tmrt_{code}*.tif")):
+                    return False
+                if not os.path.exists(os.path.join(sdir, "tmrt", f"tmrt_{ts:%Y%m%d_%H%M}.tif")):
+                    return False
+            return True
+        # V3_REUSE=1: report from this tile's existing outputs instead of
+        # running both models again (they take most of an hour on a laptop).
+        if os.environ.get("V3_REUSE") and have_all():
+            print(f"V3 {sc}: reusing this tile's UMEP and solweig outputs", flush=True)
+        else:
+            print(f"V3 {sc}: UMEP SOLWEIG, {len(wl)} steps", flush=True)
+            runner = SolweigRunCore(ini, params)
+            runner.run()
+            loc = runner.location
+            print(f"V3 {sc}: solweig on the CPU at {loc['latitude']:.5f}, {loc['longitude']:.5f}, "
+                  f"{loc['altitude']:.1f} m", flush=True)
+            surf, _ = RH.prepare(sc, in_dir=tile_dir, cache_dir=os.path.join(HEAT_DIR, "cache", "v3", sc))
+            orig = RH.location
+            RH.location = lambda meta=None: solweig.Location(latitude=loc["latitude"],
+                                                             longitude=loc["longitude"],
+                                                             altitude=loc["altitude"], utc_offset=UTC)
+            try:
+                RH.run(sc, "dec", surface=surf, out_dir=sdir, gpu=False, weather=list(wl),
+                       prepared_with="cpu", log=lambda s: print(s, flush=True))
+            finally:
+                RH.location = orig
         for ts in steps:
             code = f"{ts.year}_{ts.timetuple().tm_yday}_{ts.hour:02d}{ts.minute:02d}"
             hit = glob.glob(os.path.join(out_dir, f"Tmrt_{code}*.tif"))
@@ -242,9 +256,9 @@ def v3():
         rec["cells_change_le_minus2_umep"] = int((du[ok] <= -2).sum())
         worst = max(worst, rec["change_rmse"])
         out["steps"].append(rec)
-        print(f"V3 {rec['sun_time']} {CLOCK}: Tmrt solweig minus UMEP, bias/RMSE 2017 "
-              f"{rec['bias_2017']:+.2f}/{rec['rmse_2017']:.2f} C, today {rec['bias_today']:+.2f}/"
-              f"{rec['rmse_today']:.2f} C; change today - 2017 bias {rec['change_bias']:+.2f}, RMSE "
+        print(f"V3 {rec['sun_time']} {CLOCK}: Tmrt solweig minus UMEP, bias/RMSE {BEFORE} "
+              f"{rec[f'bias_{BEFORE}']:+.2f}/{rec[f'rmse_{BEFORE}']:.2f} C, today {rec['bias_today']:+.2f}/"
+              f"{rec['rmse_today']:.2f} C; change today - {BEFORE} bias {rec['change_bias']:+.2f}, RMSE "
               f"{rec['change_rmse']:.2f} C; cells >= 2 C colder: solweig "
               f"{rec['cells_change_le_minus2_solweig']:,}, UMEP {rec['cells_change_le_minus2_umep']:,}",
               flush=True)
