@@ -11,6 +11,8 @@ statistics, because the median alone proved jumpy (NL_NOTES D22, D23).
     TWIN_CITY=rotterdam .venv-heat/Scripts/python -I tools/nest_ring.py noise <box A> <box B>
         D25: two seeds of a box whose runs saved their halves: do the halves
         gauge the seed gap, and how well is each change known
+    TWIN_CITY=rotterdam .venv-heat/Scripts/python -I tools/nest_ring.py drift <box>
+        D26: a run averaged in blocks: drift, settling time, settled change
 
 A box is a run folder name without its scenario, e.g.
 dec_247.5_2m_fw_w600_avg6_sides_pzh; a path prefix "cloud:" reads
@@ -129,6 +131,66 @@ def noise_check(args):
             json.dump(out, f, indent=1)
 
 
+def drift(args):
+    """D26: a run averaged in blocks. Per block, the ring mean and median for each year and the change;
+    the settling block (first after which a line through the rest has no slope beyond 2 standard errors,
+    both years); the settled change and its batch-means noise."""
+    from pipeline.wind_export import RunBox, resample
+    import tools.wind_nest as N
+    x, y, ring = N.tower_ring()
+    lev = {}
+    for sc in (N.BEFORE, "today"):
+        d = folder(N, args.box, sc)
+        with open(os.path.join(d, "run.json"), encoding="utf-8") as f:
+            m = json.load(f)
+        z = np.load(os.path.join(d, "street.npz"))
+        ok = (~z["roof"]) & np.isfinite(z["street_speed"])
+        v = np.stack([resample(b, ok, RunBox(m), x[ring], y[ring]) for b in z["street_blocks"]])
+        v = v[:, np.isfinite(v).all(axis=0)]
+        lev[sc] = {"mean": v.mean(axis=1), "median": np.median(v, axis=1)}
+    nb = len(lev["today"]["mean"])
+    a, b = lev[N.BEFORE], lev["today"]
+    print(f"{args.box}: {nb} blocks of {N.BEFORE} and today (ring mean, ring median; change by mean)")
+    for i in range(nb):
+        print(f"  block {i + 1:2d}: {N.BEFORE} {a['mean'][i]:.5f} {a['median'][i]:.5f}   today {b['mean'][i]:.5f} "
+              f"{b['median'][i]:.5f}   change {(b['mean'][i] / a['mean'][i] - 1) * 100:+6.1f}%")
+
+    def flat(series, s):
+        t = np.arange(s, nb, dtype=float)
+        v = series[s:] / series[s:].mean()
+        if len(t) < 4:
+            return False
+        A = np.vstack([t, np.ones_like(t)]).T
+        coef, res, *_ = np.linalg.lstsq(A, v, rcond=None)
+        dof = len(t) - 2
+        s2 = float(res[0]) / dof if len(res) else float(((v - A @ coef) ** 2).sum()) / dof
+        se = np.sqrt(s2 / ((t - t.mean()) ** 2).sum())
+        return abs(coef[0]) <= 2 * se
+
+    out = {"box": args.box, "blocks": nb}
+    for stat in ("mean", "median"):
+        settle = next((s for s in range(nb - 3) if flat(a[stat], s) and flat(b[stat], s)), None)
+        if settle is None:
+            print(f"  {stat}: no settled stretch of 4 blocks or more")
+            out[stat] = {"settled": False}
+            continue
+        aa, bb = a[stat][settle:], b[stat][settle:]
+        change = (bb.mean() / aa.mean() - 1) * 100
+        c = (bb / aa - 1) * 100
+        r1 = float(np.corrcoef(c[:-1], c[1:])[0, 1]) if len(c) > 3 else 0.0
+        infl = np.sqrt((1 + r1) / (1 - r1)) if r1 > 0.3 else 1.0
+        noise = float(c.std(ddof=1) / np.sqrt(len(c)) * infl)
+        drift_pct = {sc: round(float((v[stat][settle:].mean() / v[stat][0] - 1) * 100), 1)
+                     for sc, v in ((N.BEFORE, a), ("today", b))}
+        out[stat] = {"settled": True, "settle_blocks": settle, "blocks_used": len(c), "change": round(change, 2),
+                     "noise": round(noise, 2), "lag1": round(r1, 2), "settled_vs_block1_pct": drift_pct}
+        print(f"  {stat}: settled after {settle} block(s); change over blocks {settle + 1}-{nb}: {change:+.1f}% "
+              f"+- {noise:.1f} (lag-1 {r1:+.2f}); settled level vs block 1: {drift_pct}")
+    if args.save:
+        with open(args.save, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(out, f, indent=1)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="what", required=True)
@@ -142,8 +204,11 @@ def main():
     n.add_argument("a")
     n.add_argument("b")
     n.add_argument("--save", help="write the verdict as JSON here")
+    d = sub.add_parser("drift")
+    d.add_argument("box")
+    d.add_argument("--save", help="write the reading as JSON here")
     args = ap.parse_args()
-    {"table": table, "twins": twins, "noise": noise_check}[args.what](args)
+    {"table": table, "twins": twins, "noise": noise_check, "drift": drift}[args.what](args)
     return 0
 
 
