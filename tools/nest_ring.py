@@ -8,6 +8,9 @@ statistics, because the median alone proved jumpy (NL_NOTES D22, D23).
     TWIN_CITY=rotterdam .venv-heat/Scripts/python -I tools/nest_ring.py twins <box A> <box B>
         how far each statistic moves between two equally valid runs
         (another gust seed, another GPU)
+    TWIN_CITY=rotterdam .venv-heat/Scripts/python -I tools/nest_ring.py noise <box A> <box B>
+        D25: two seeds of a box whose runs saved their halves: do the halves
+        gauge the seed gap, and how well is each change known
 
 A box is a run folder name without its scenario, e.g.
 dec_247.5_2m_fw_w600_avg6_sides_pzh; a path prefix "cloud:" reads
@@ -96,6 +99,36 @@ def twins(args):
             json.dump(out, f, indent=1)
 
 
+def noise_check(args):
+    """D25: do the halves gauge the noise? And is the mean change known to 5 points?"""
+    import tools.wind_nest as N
+    ring_xy = N.tower_ring()
+    ra, rb = changes(N, args.a, ring_xy), changes(N, args.b, ring_xy)
+    out = {"a": args.a, "b": args.b, "stats": {}}
+    for s in STATS:
+        if "noise" not in ra[s] or "noise" not in rb[s]:
+            raise SystemExit(f"{s}: a run without saved halves")
+        gap = rb[s]["change"] - ra[s]["change"]
+        halves = float(np.sqrt((ra[s]["noise"] ** 2 + rb[s]["noise"] ** 2) / 2))
+        noise = max(halves, abs(gap) / 2)
+        out["stats"][s] = {"a": round(ra[s]["change"], 2), "b": round(rb[s]["change"], 2), "seed_gap": round(gap, 2),
+                           "halves_sigma": round(halves, 2), "halves_gauge_ok": abs(gap) <= 2.5 * halves,
+                           "noise": round(noise, 2), "both_seeds": round((ra[s]["change"] + rb[s]["change"]) / 2, 2)}
+        print(f"  {s:6s} {ra[s]['change']:+6.1f}% / {rb[s]['change']:+6.1f}%: seed gap {gap:+5.1f}, halves sigma "
+              f"{halves:4.1f} ({'gauge ok' if abs(gap) <= 2.5 * halves else 'halves miss it'}); "
+              f"both seeds {out['stats'][s]['both_seeds']:+.1f}% +/- {noise:.1f}")
+    m = out["stats"]["mean"]
+    out["mean_within_5_points"] = m["noise"] <= 5.0
+    if not out["mean_within_5_points"]:
+        out["averaging_factor_for_5_points"] = round((m["noise"] / 5.0) ** 2, 2)
+    print(f"  mean change {m['both_seeds']:+.1f}% +/- {m['noise']:.1f}: "
+          + ("within 5 points" if out["mean_within_5_points"] else
+             f"needs about {out['averaging_factor_for_5_points']}x the averaging for 5 points"))
+    if args.save:
+        with open(args.save, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(out, f, indent=1)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="what", required=True)
@@ -105,8 +138,12 @@ def main():
     w.add_argument("a")
     w.add_argument("b")
     w.add_argument("--save", help="write the comparison as JSON here")
+    n = sub.add_parser("noise")
+    n.add_argument("a")
+    n.add_argument("b")
+    n.add_argument("--save", help="write the verdict as JSON here")
     args = ap.parse_args()
-    {"table": table, "twins": twins}[args.what](args)
+    {"table": table, "twins": twins, "noise": noise_check}[args.what](args)
     return 0
 
 
