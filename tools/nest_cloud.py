@@ -90,19 +90,33 @@ def ram_gb():
         return 0.0
 
 
+def peak_gb(path):
+    """Host RAM one solve needs at peak: 6.4 GB per 99 M cells (measured), plus the gust field twice over
+    (it is filtered component by component)."""
+    z = np.load(path)
+    nz, ny, nx = z["solid"].shape
+    s = int(z["gust_slices"]) if "gust_slices" in z.files else 256
+    if s <= 0:
+        s = int(np.ceil((float(z["spinup"]) + float(z["average"])) * nx)) + 1
+    return 6.4 * nz * ny * nx / 99.3e6 + 2 * 3 * s * nz * ny * 4 / 2**30
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("src")
     ap.add_argument("out")
     ap.add_argument("--backend", default="auto", choices=("auto", "cuda", "opencl"))
     ap.add_argument("--one", action="store_true", help="src is one pack.npz (used for two GPUs)")
+    ap.add_argument("--parallel", type=int, default=0, help="packs at once (default: as many as GPUs and RAM allow)")
     a = ap.parse_args()
     if a.one:
         solve_one(a.src, a.out, a.backend)
         sys.exit(0)
     packs = sorted(glob.glob(os.path.join(a.src, "**", "pack.npz"), recursive=True))
-    print(f"{len(packs)} packs, {gpus()} GPU(s), {ram_gb():.0f} GB RAM", flush=True)
-    n = min(gpus(), len(packs)) if ram_gb() >= 24 else 1
+    need = max(peak_gb(p) for p in packs)
+    print(f"{len(packs)} packs, {gpus()} GPU(s), {ram_gb():.0f} GB RAM; the largest needs about {need:.0f} GB",
+          flush=True)
+    n = a.parallel or (min(gpus(), len(packs)) if 2 * need <= 0.85 * ram_gb() else 1)
     if n == 1:
         for p in packs:
             solve_one(p, a.out, a.backend)

@@ -107,7 +107,7 @@ def solve(p, log=print, backend="auto"):
                     "flow_through_steps": round(ft), "spinup_steps": n_spin, "average_steps": n_avg,
                     "samples": int(k_full), "mlups": [round(x) for x in mlups], "device": s.device_name,
                     "backend": kind, "wall_drag": round(s.cd_wall, 5), "gusts_calibrated": turb.calibrated,
-                    "gust_slices": turb.slices,
+                    "gust_slices": turb.slices, "gust_lean_draw": turb.lean,
                     "solve_s": round(time.time() - t0)}}
     log(f"  solved in {out['meta']['solve_s']} s at {np.mean(mlups):.0f} MLUPs on {s.device_name}; street "
         f"halves differ by {conv['median_abs_diff_over_median_speed'] * 100:.1f}%; nesting "

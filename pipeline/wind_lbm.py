@@ -476,12 +476,20 @@ class InflowTurbulence:
     """
 
     def __init__(self, profile, ground_k, res_m, ny, sigma_m=80.0, slices=256, seed=11, iu=None,
-                 calibrate=True):
+                 calibrate=True, lean=None):
         from scipy.ndimage import gaussian_filter
         nz = len(profile)
         rng = np.random.default_rng(seed)
         sg = sigma_m / res_m
-        f = rng.standard_normal((3, slices, nz, ny)).astype(np.float32)
+        # lean: draw each component in float32 (a different random stream), for fields whose float64 draw
+        # would pass 8 GB (long gusts in a 2.2 km box: 16.7 GB). Smaller fields keep the original draw.
+        self.lean = (3 * slices * nz * ny * 8 > 8 * 2**30) if lean is None else bool(lean)
+        if self.lean:
+            f = np.empty((3, slices, nz, ny), np.float32)
+            for c in range(3):
+                f[c] = rng.standard_normal((slices, nz, ny), dtype=np.float32)
+        else:
+            f = rng.standard_normal((3, slices, nz, ny)).astype(np.float32)
         for c in range(3):
             f[c] = gaussian_filter(f[c], sigma=(sg, sg, sg), mode=("wrap", "nearest", "wrap"))
             if calibrate:
