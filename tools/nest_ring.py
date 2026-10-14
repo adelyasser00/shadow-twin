@@ -79,7 +79,7 @@ def table(args):
     print(f"{'box':52s} " + " ".join(f"{s:>14s}" for s in STATS))
     for box in args.boxes:
         r = changes(N, box, ring_xy)
-        cells = [f"{r[s]['change']:+6.1f}" + (f" ±{r[s]['noise']:4.1f}" if "noise" in r[s] else "      ")
+        cells = [f"{r[s]['change']:+6.1f}" + (f" +-{r[s]['noise']:4.1f}" if "noise" in r[s] else "      ")
                  for s in STATS]
         print(f"{box:52s} " + " ".join(f"{c:>14s}" for c in cells))
 
