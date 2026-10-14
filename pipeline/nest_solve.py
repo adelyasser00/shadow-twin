@@ -49,12 +49,22 @@ def solve(p, log=print, backend="auto"):
     slices = int(p.get("gust_slices", 256))
     if slices <= 0:
         slices = int(np.ceil((float(p["spinup"]) + float(p["average"])) * nx)) + 1
-    turb = InflowTurbulence(prof, gk, float(p["res_m"]), ny, iu=p["iu"], seed=int(p.get("seed", 11)), slices=slices)
-    f = turb.field
-    f *= p["fluid_in"][None, None].astype(np.float32)        # no gusts inside the 8 m run's buildings
-    f[0] += (p["U_in"][0] - prof[:, None]).astype(np.float32)[None]
-    f[1] += p["U_in"][1].astype(np.float32)[None]
-    f[2] += p["U_in"][2].astype(np.float32)[None]
+    coarsen = int(p.get("gust_coarsen", 0))
+    if coarsen > 1:
+        # The same gusts drawn on a coarser grid and interpolated slice by slice: 64 times less memory at 4.
+        from .wind_lbm import CoarseInflowTurbulence
+        turb = CoarseInflowTurbulence(prof, gk, float(p["res_m"]), ny, iu=p["iu"], seed=int(p.get("seed", 11)),
+                                      slices=slices, coarsen=coarsen)
+        turb.set_inlet(scale=p["fluid_in"],
+                       offset=np.stack([p["U_in"][0] - prof[:, None], p["U_in"][1], p["U_in"][2]]))
+    else:
+        turb = InflowTurbulence(prof, gk, float(p["res_m"]), ny, iu=p["iu"], seed=int(p.get("seed", 11)),
+                                slices=slices)
+        f = turb.field
+        f *= p["fluid_in"][None, None].astype(np.float32)        # no gusts inside the 8 m run's buildings
+        f[0] += (p["U_in"][0] - prof[:, None]).astype(np.float32)[None]
+        f[1] += p["U_in"][1].astype(np.float32)[None]
+        f[2] += p["U_in"][2].astype(np.float32)[None]
     kind = pick_backend(backend)
     if kind == "cuda":
         from .wind_lbm_cuda import CudaSolver as S
@@ -107,7 +117,7 @@ def solve(p, log=print, backend="auto"):
                     "flow_through_steps": round(ft), "spinup_steps": n_spin, "average_steps": n_avg,
                     "samples": int(k_full), "mlups": [round(x) for x in mlups], "device": s.device_name,
                     "backend": kind, "wall_drag": round(s.cd_wall, 5), "gusts_calibrated": turb.calibrated,
-                    "gust_slices": turb.slices, "gust_lean_draw": turb.lean,
+                    "gust_slices": turb.slices, "gust_lean_draw": turb.lean, "gust_coarsen": coarsen,
                     "solve_s": round(time.time() - t0)}}
     log(f"  solved in {out['meta']['solve_s']} s at {np.mean(mlups):.0f} MLUPs on {s.device_name}; street "
         f"halves differ by {conv['median_abs_diff_over_median_speed'] * 100:.1f}%; nesting "

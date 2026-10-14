@@ -121,7 +121,7 @@ def nest_name(scenario, theta, facade=True, width=NEST["width_m"], average=AVERA
             + ("" if sides == "periodic" else "_sides")
             + (f"_p{parent_tag.strip('_')}" if parent_tag else "")
             + ("" if seed == SEED else f"_s{seed}")
-            + ("" if gusts == "cycle" else "_gl"))
+            + {"cycle": "", "long": "_gl", "coarse": "_gc"}[gusts])
 
 
 def prepare(scenario, theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_HERO,
@@ -179,7 +179,7 @@ def prepare(scenario, theta, facade=True, log=print, width=NEST["width_m"], aver
             "check_fluid": flp.astype(np.float32),
             "res_m": RES, "z0_m": Z0_M, "facade": bool(facade), "spinup": SPINUP, "average": float(average),
             "accumulate_every": ACC_EVERY, "inlet_skip": INLET_SKIP, "seed": int(seed),
-            "gust_slices": 256 if gusts == "cycle" else 0}
+            "gust_slices": 256 if gusts == "cycle" else 0, "gust_coarsen": 4 if gusts == "coarse" else 0}
     meta = {"scenario": scenario, "season": "dec", "theta_from_deg": float(theta), "res_m": RES,
             "box": bx.meta(), "box_size": box, "gmin_m": gmin, "ground_layer": gk, "tower": TOWER,
             "tower_xy": [float(tx), float(ty)], "parent": pname, "gust_seed": int(seed), "gusts": gusts,
@@ -283,7 +283,7 @@ def score_path(theta, width=NEST["width_m"], average=AVERAGE_HERO, sides="period
            + ("" if sides == "periodic" else "_sides")
            + (f"_p{parent_tag.strip('_')}" if parent_tag else "")
            + ("" if seed == SEED else f"_s{seed}")
-           + ("" if gusts == "cycle" else "_gl"))
+           + {"cycle": "", "long": "_gl", "coarse": "_gc"}[gusts])
     return os.path.join(OUT, f"score_{theta:05.1f}{tag}.json")
 
 
@@ -350,8 +350,9 @@ def main():
     ap.add_argument("--height", type=float, default=NEST["height_m"], help="box height, m")
     ap.add_argument("--average", type=float, default=AVERAGE_HERO, help="flow-throughs averaged")
     ap.add_argument("--seed", type=int, default=SEED, help="the inlet gusts' random seed (D23 noise test)")
-    ap.add_argument("--gusts", choices=("cycle", "long"), default="cycle",
-                    help="cycle: gusts repeat every 512 m of travel (every run before D25); long: never repeat")
+    ap.add_argument("--gusts", choices=("cycle", "long", "coarse"), default="cycle",
+                    help="cycle: gusts repeat every 512 m of travel (every run before D25); long: never repeat; "
+                         "coarse: never repeat, drawn on a 4x coarser grid (64x less memory)")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
     t0 = time.time()

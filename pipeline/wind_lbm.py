@@ -516,6 +516,97 @@ class InflowTurbulence:
         return np.ascontiguousarray(self.field[:, k % self.slices]).ravel()
 
 
+class CoarseInflowTurbulence:
+    """
+    InflowTurbulence's gusts, generated on a grid `coarsen` times coarser in
+    time, height and across, and interpolated (linearly) one slice at a time
+    as the solver asks for it. At 2 m cells the 80 m gusts are 40 cells
+    wide, so a 4 times coarser grid still carries 10 points across one; the
+    field takes 64 times less memory (0.2 GB instead of 8 to 30 GB for long,
+    never-repeating gusts in a 2.2 km box; NL_NOTES D25).
+
+    Same calibration as InflowTurbulence: every inlet point's gusts average
+    to zero over the run (time interpolation keeps the coarse points' zero
+    means), and their strength is set height by height on the interpolated
+    slices. A different random stream from InflowTurbulence for the same seed.
+    set_inlet() applies the nest's per-point open fraction and the coarser
+    run's mean wind, which nest_solve applies in place to InflowTurbulence.
+    """
+
+    def __init__(self, profile, ground_k, res_m, ny, sigma_m=80.0, slices=256, seed=11, iu=None, coarsen=4):
+        from scipy.ndimage import gaussian_filter
+        nz = len(profile)
+        c = int(coarsen)
+        rng = np.random.default_rng(seed)
+        tc = int(np.ceil(slices / c)) + 1
+        nzc = int(np.ceil((nz - 1) / c)) + 1
+        nyc = int(np.ceil(ny / c))
+        sg = sigma_m / res_m / c
+        f = np.empty((3, tc, nzc, nyc), np.float32)
+        for k in range(3):
+            f[k] = rng.standard_normal((tc, nzc, nyc), dtype=np.float32)
+            f[k] = gaussian_filter(f[k], sigma=(sg, sg, sg), mode=("wrap", "nearest", "wrap"))
+            f[k] -= f[k].mean(axis=0, keepdims=True)
+        self.coarse = f
+        self.c, self.nz, self.ny = c, nz, ny
+        self.slices = tc * c                            # fine slices before the sequence repeats
+        z = np.minimum(np.arange(nz) / c, nzc - 1)
+        self.iz0 = np.minimum(np.floor(z).astype(np.int64), nzc - 1)
+        self.iz1 = np.minimum(self.iz0 + 1, nzc - 1)
+        self.wz = (z - self.iz0).astype(np.float32)[:, None]
+        y = np.arange(ny) / c
+        self.iy0 = np.floor(y).astype(np.int64) % nyc
+        self.iy1 = (self.iy0 + 1) % nyc
+        self.wy = (y - np.floor(y)).astype(np.float32)[None, :]
+        self.norm = np.ones((3, nz, 1), np.float32)
+        # Strength height by height, measured on interpolated slices (every 3rd, all phases of the coarse grid).
+        acc = np.zeros((3, nz), np.float64)
+        n = 0
+        for k in range(0, self.slices, 3):
+            s = self._raw(k)
+            acc += (s.astype(np.float64) ** 2).mean(axis=2)
+            n += 1
+        self.norm = (1.0 / np.maximum(np.sqrt(acc / n), 1e-9)).astype(np.float32)[:, :, None]
+        if iu is None:
+            h = np.maximum((np.arange(nz) - ground_k + 0.5) * res_m, 0.5)
+            iu = np.clip(0.30 * (h / 10.0) ** -0.25, 0.08, 0.35)
+        else:
+            iu = np.asarray(iu, np.float64)
+        sig = (iu * np.asarray(profile, np.float32)).astype(np.float32)
+        sig[:ground_k] = 0.0
+        self.norm *= np.stack([r * sig for r in (1.0, 0.75, 0.5)])[:, :, None].astype(np.float32)
+        self.scale = None
+        self.offset = None
+        self.calibrated = True
+        self.lean = True
+        u_conv = float(np.asarray(profile)[ground_k:].mean())
+        self.steps_per_slice = 1.0 / max(u_conv, 1e-4)
+
+    def _raw(self, k):
+        """Interpolated, uncalibrated slice k: (3, nz, ny)."""
+        t = (k % self.slices) / self.c
+        t0 = int(np.floor(t))
+        w = np.float32(t - t0)
+        a = self.coarse[:, t0 % self.coarse.shape[1]]
+        b = self.coarse[:, (t0 + 1) % self.coarse.shape[1]]
+        s = a + (b - a) * w                              # (3, nzc, nyc)
+        s = s[:, self.iz0] + (s[:, self.iz1] - s[:, self.iz0]) * self.wz[None]
+        return s[:, :, self.iy0] + (s[:, :, self.iy1] - s[:, :, self.iy0]) * self.wy[None]
+
+    def set_inlet(self, scale=None, offset=None):
+        """Per-point factor (nz, ny) on the gusts, then a per-point mean wind (3, nz, ny) added."""
+        self.scale = None if scale is None else np.asarray(scale, np.float32)[None]
+        self.offset = None if offset is None else np.asarray(offset, np.float32)
+
+    def slice(self, k):
+        s = self._raw(k) * self.norm
+        if self.scale is not None:
+            s *= self.scale
+        if self.offset is not None:
+            s += self.offset
+        return np.ascontiguousarray(s, np.float32).ravel()
+
+
 def wall_drag(z0_m, res_m):
     """Log-law drag coefficient for the first cell above a wall, centre half a cell up."""
     return (KAPPA / np.log(0.5 * res_m / z0_m)) ** 2

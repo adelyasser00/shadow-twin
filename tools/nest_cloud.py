@@ -98,7 +98,8 @@ def peak_gb(path):
     s = int(z["gust_slices"]) if "gust_slices" in z.files else 256
     if s <= 0:
         s = int(np.ceil((float(z["spinup"]) + float(z["average"])) * nx)) + 1
-    return 6.4 * nz * ny * nx / 99.3e6 + 2 * 3 * s * nz * ny * 4 / 2**30
+    c = int(z["gust_coarsen"]) if "gust_coarsen" in z.files else 0
+    return 6.4 * nz * ny * nx / 99.3e6 + 2 * 3 * s * nz * ny * 4 / 2**30 / (c ** 3 if c > 1 else 1)
 
 
 if __name__ == "__main__":
@@ -352,7 +353,7 @@ def main():
     a.add_argument("--length", type=float, default=600.0)
     a.add_argument("--height", type=float, default=600.0)
     a.add_argument("--seed", type=int, default=11, help="the inlet gusts' random seed")
-    a.add_argument("--gusts", choices=("cycle", "long"), default="cycle")
+    a.add_argument("--gusts", choices=("cycle", "long", "coarse"), default="cycle")
     a.add_argument("--average", type=float, default=6.0)
     a.add_argument("--sides", choices=("periodic", "parent"), default="parent")
     a.add_argument("--parent-tag", default="")
