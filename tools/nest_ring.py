@@ -114,13 +114,13 @@ def noise_check(args):
         halves = float(np.sqrt((ra[s]["noise"] ** 2 + rb[s]["noise"] ** 2) / 2))
         noise = max(halves, abs(gap) / 2)
         out["stats"][s] = {"a": round(ra[s]["change"], 2), "b": round(rb[s]["change"], 2), "seed_gap": round(gap, 2),
-                           "halves_sigma": round(halves, 2), "halves_gauge_ok": abs(gap) <= 2.5 * halves,
+                           "halves_sigma": round(halves, 2), "halves_gauge_ok": bool(abs(gap) <= 2.5 * halves),
                            "noise": round(noise, 2), "both_seeds": round((ra[s]["change"] + rb[s]["change"]) / 2, 2)}
         print(f"  {s:6s} {ra[s]['change']:+6.1f}% / {rb[s]['change']:+6.1f}%: seed gap {gap:+5.1f}, halves sigma "
               f"{halves:4.1f} ({'gauge ok' if abs(gap) <= 2.5 * halves else 'halves miss it'}); "
               f"both seeds {out['stats'][s]['both_seeds']:+.1f}% +/- {noise:.1f}")
     m = out["stats"]["mean"]
-    out["mean_within_5_points"] = m["noise"] <= 5.0
+    out["mean_within_5_points"] = bool(m["noise"] <= 5.0)
     if not out["mean_within_5_points"]:
         out["averaging_factor_for_5_points"] = round((m["noise"] / 5.0) ** 2, 2)
     print(f"  mean change {m['both_seeds']:+.1f}% +/- {m['noise']:.1f}: "
