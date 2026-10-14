@@ -182,11 +182,11 @@ def pack(args):
     os.makedirs(up, exist_ok=True)
     for sc in args.scenario or [city.before(), "today"]:
         name = N.nest_name(sc, args.dir, True, args.width, args.average, args.sides, args.parent_tag, args.length,
-                           args.height, args.seed, args.gusts)
+                           args.height, args.seed, args.gusts, args.blocks)
         local = os.path.join(root, "local", name)
         t0 = time.time()
         p, meta, extra = N.prepare(sc, args.dir, True, print, args.width, args.average, args.sides, args.parent_tag,
-                                   args.length, args.height, args.seed, args.gusts)
+                                   args.length, args.height, args.seed, args.gusts, args.blocks)
         os.makedirs(local, exist_ok=True)
         with open(os.path.join(local, "meta.json"), "w", encoding="utf-8", newline="\n") as f:
             json.dump(meta, f, indent=1)
@@ -248,17 +248,17 @@ def unpack(args):
         compare(N, root, key, pair)
     for key in sorted({(m["theta_from_deg"], m["box_size"]["width_m"], m["box_size"]["length_m"],
                         m["box_size"]["height_m"], m["average_flow_throughs"], m["sides"], m["parent"].split("8m", 1)[-1],
-                        m.get("gust_seed", N.SEED), m.get("gusts", "cycle"))
+                        m.get("gust_seed", N.SEED), m.get("gusts", "cycle"), m.get("blocks", 2))
                        for m in done}):
-        theta, width, length, height, average, sides, tag, seed, gusts = key
+        theta, width, length, height, average, sides, tag, seed, gusts, blocks = key
         sides = "periodic" if sides == "periodic" else "parent"
-        sp = N.score_path(theta, width, average, sides, tag, length, height, seed, gusts)
+        sp = N.score_path(theta, width, average, sides, tag, length, height, seed, gusts, blocks)
         if os.path.exists(sp):
             print(f"  {os.path.basename(sp)}: already scored")
             continue
         try:
             N.score(theta, width=width, average=average, sides=sides, parent_tag=tag, length=length, height=height,
-                    seed=seed, gusts=gusts)
+                    seed=seed, gusts=gusts, blocks=blocks)
         except (OSError, SystemExit) as e:
             print(f"  not scored yet ({e}): both years are needed")
 
@@ -354,6 +354,7 @@ def main():
     a.add_argument("--height", type=float, default=600.0)
     a.add_argument("--seed", type=int, default=11, help="the inlet gusts' random seed")
     a.add_argument("--gusts", choices=("cycle", "long", "coarse"), default="cycle")
+    a.add_argument("--blocks", type=int, default=2)
     a.add_argument("--average", type=float, default=6.0)
     a.add_argument("--sides", choices=("periodic", "parent"), default="parent")
     a.add_argument("--parent-tag", default="")

@@ -76,19 +76,40 @@ def solve(p, log=print, backend="auto"):
     ft = nx / float(prof[gk:].mean())
     n_spin = int(float(p["spinup"]) * ft)
     n_avg = int(float(p["average"]) * ft)
-    n_avg -= n_avg % (2 * acc_every)
+    # blocks: the average is taken in this many equal blocks and each block's street layer is kept, to see
+    # drift (a trend across blocks) apart from noise (their scatter); 2 is the original halves (D25).
+    blocks = int(p.get("blocks", 2))
+    if blocks < 2 or blocks % 2:
+        raise SystemExit("blocks must be even, 2 or more")
+    n_avg -= n_avg % (blocks * acc_every)
     log(f"  flow-through {ft:,.0f} steps; {n_spin:,} to settle, {n_avg:,} averaged ({kind})")
     mlups = [s.run(n_spin, log_every=max(1, n_spin // 2))]
     if not np.isfinite(s.max_speed()):
         raise SystemExit("the solver blew up while settling")
-    mlups.append(s.run(n_avg // 2, accumulate_every=acc_every))
-    half, k_half = s.sums()
-    half = half[4].copy()                                    # only |u| is needed from the first half
-    mlups.append(s.run(n_avg // 2, accumulate_every=acc_every))
-    full, k_full = s.sums()
+    kf = p["kfirst"]
+    street_blocks, block_samples = [], []
+    if blocks == 2:
+        mlups.append(s.run(n_avg // 2, accumulate_every=acc_every))
+        half, k_half = s.sums()
+        half = half[4].copy()                                    # only |u| is needed from the first half
+        mlups.append(s.run(n_avg // 2, accumulate_every=acc_every))
+        full, k_full = s.sums()
+    else:
+        prev, k_prev = None, 0
+        for b in range(blocks):
+            mlups.append(s.run(n_avg // blocks, accumulate_every=acc_every))
+            full, k_full = s.sums()
+            cur = full[4].copy()
+            block = cur if prev is None else cur - prev
+            street_blocks.append(street_layer((block / (k_full - k_prev))[None], kf)[0].astype(np.float32))
+            block_samples.append(int(k_full - k_prev))
+            if b == blocks // 2 - 1:
+                half, k_half = cur, k_full
+            prev, k_prev = cur, k_full
+            log(f"    block {b + 1}/{blocks}: street mean {float(street_blocks[-1][~p['roof']].mean()):.5f}")
+        del prev, cur, block
     if not np.isfinite(full).all():
         raise SystemExit("the solver blew up while averaging")
-    kf = p["kfirst"]
     sp1 = street_layer((half / k_half)[None], kf)[0]
     sp2 = street_layer(((full[4] - half) / (k_full - k_half))[None], kf)[0]
     mean = full / k_full
@@ -119,6 +140,9 @@ def solve(p, log=print, backend="auto"):
                     "backend": kind, "wall_drag": round(s.cd_wall, 5), "gusts_calibrated": turb.calibrated,
                     "gust_slices": turb.slices, "gust_lean_draw": turb.lean, "gust_coarsen": coarsen,
                     "solve_s": round(time.time() - t0)}}
+    if street_blocks:
+        out["street_blocks"] = np.stack(street_blocks)
+        out["meta"].update({"blocks": blocks, "block_samples": block_samples})
     log(f"  solved in {out['meta']['solve_s']} s at {np.mean(mlups):.0f} MLUPs on {s.device_name}; street "
         f"halves differ by {conv['median_abs_diff_over_median_speed'] * 100:.1f}%; nesting "
         f"{nest_err * 100:.1f}%")
