@@ -95,6 +95,7 @@ def solve(p, log=print, backend="auto"):
     street = street_layer(mean, kf)
     above = street_layer(mean[4:5], np.minimum(kf + 1, nz - 1))[0]
     out = {"street_speed": street[4].astype(np.float32), "street_speed_above": above.astype(np.float32),
+           "street_half1": sp1.astype(np.float32), "street_half2": sp2.astype(np.float32),
            "street_u": street[:3].astype(np.float32), "u_low": mean[:3, :41].astype(np.float16),
            "check_child": child.astype(np.float32), "check_parent": par.astype(np.float32), "check_ok": ok,
            "meta": {"convergence_street_speed": conv, "nest_err": nest_err, "nest_bias": nest_bias,

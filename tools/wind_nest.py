@@ -190,9 +190,11 @@ def prepare(scenario, theta, facade=True, log=print, width=NEST["width_m"], aver
 
 
 def finish(out, pack, meta, extra, res, t0, log=print):
-    """Write street.npz and run.json exactly as the original run_one did."""
+    """Write street.npz and run.json exactly as the original run_one did (plus the two half-run street
+    layers when the solve made them, for the noise of ring statistics, D23)."""
     os.makedirs(out, exist_ok=True)
-    np.savez_compressed(os.path.join(out, "street.npz"), street_speed=res["street_speed"],
+    halves = {k: res[k] for k in ("street_half1", "street_half2") if k in res}
+    np.savez_compressed(os.path.join(out, "street.npz"), **halves, street_speed=res["street_speed"],
                         street_speed_above=res["street_speed_above"],
                         street_u=res["street_u"], kfirst=pack["kfirst"], roof=pack["roof"],
                         building=extra["building"], ground=extra["ground"],
