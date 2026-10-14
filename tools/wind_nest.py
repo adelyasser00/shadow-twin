@@ -104,23 +104,27 @@ def parent_at(m, u, uu, pb, x, y, zabs):
     return U, 0.5 * np.maximum(UU - (U ** 2).sum(axis=0), 0.0), np.clip(fluid, 0.0, 1.0)
 
 
+SEED = 11                       # the inlet gusts' random seed; every run before D23 used 11
+
+
 def nest_box(width, length=NEST["length_m"], height=NEST["height_m"]):
     return dict(NEST, width_m=float(width), length_m=float(length), height_m=float(height))
 
 
 def nest_name(scenario, theta, facade=True, width=NEST["width_m"], average=AVERAGE_HERO, sides="periodic",
-              parent_tag="", length=NEST["length_m"], height=NEST["height_m"]):
+              parent_tag="", length=NEST["length_m"], height=NEST["height_m"], seed=SEED):
     return (f"{scenario}_dec_{theta:05.1f}_{RES:g}m" + ("_fw" if facade else "")
             + ("" if width == NEST["width_m"] else f"_w{width:g}")
             + ("" if length == NEST["length_m"] else f"_l{length:g}")
             + ("" if height == NEST["height_m"] else f"_h{height:g}")
             + ("" if average == AVERAGE_HERO else f"_avg{average:g}")
             + ("" if sides == "periodic" else "_sides")
-            + (f"_p{parent_tag.strip('_')}" if parent_tag else ""))
+            + (f"_p{parent_tag.strip('_')}" if parent_tag else "")
+            + ("" if seed == SEED else f"_s{seed}"))
 
 
 def prepare(scenario, theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_HERO,
-            sides="periodic", parent_tag="", length=NEST["length_m"], height=NEST["height_m"]):
+            sides="periodic", parent_tag="", length=NEST["length_m"], height=NEST["height_m"], seed=SEED):
     """Everything the solve needs, as one dict of arrays (pipeline/nest_solve.py), and the meta to save."""
     canvas, info = load_canvas()
     m, u, uu = load_parent(scenario, theta, parent_tag)
@@ -173,10 +177,10 @@ def prepare(scenario, theta, facade=True, log=print, width=NEST["width_m"], aver
             "check_parent": np.sqrt((Up ** 2).sum(axis=0)).astype(np.float32),
             "check_fluid": flp.astype(np.float32),
             "res_m": RES, "z0_m": Z0_M, "facade": bool(facade), "spinup": SPINUP, "average": float(average),
-            "accumulate_every": ACC_EVERY, "inlet_skip": INLET_SKIP, "seed": 11}
+            "accumulate_every": ACC_EVERY, "inlet_skip": INLET_SKIP, "seed": int(seed)}
     meta = {"scenario": scenario, "season": "dec", "theta_from_deg": float(theta), "res_m": RES,
             "box": bx.meta(), "box_size": box, "gmin_m": gmin, "ground_layer": gk, "tower": TOWER,
-            "tower_xy": [float(tx), float(ty)], "parent": pname,
+            "tower_xy": [float(tx), float(ty)], "parent": pname, "gust_seed": int(seed),
             "smagorinsky": 0.17, "z0_m": Z0_M,
             "walls": "slip + wall-law drag" + (" on ground, roofs and facades" if facade else " on ground and roofs"),
             "sides": "periodic" if sides == "periodic" else "the 8 m run's time-mean wind",
@@ -215,14 +219,17 @@ def finish(out, pack, meta, extra, res, t0, log=print):
 
 
 def run_one(scenario, theta, facade=True, log=print, force=False, width=NEST["width_m"], average=AVERAGE_HERO,
-            sides="periodic", parent_tag="", backend="opencl", length=NEST["length_m"], height=NEST["height_m"]):
+            sides="periodic", parent_tag="", backend="opencl", length=NEST["length_m"], height=NEST["height_m"],
+            seed=SEED):
     from pipeline.nest_solve import solve
-    out = os.path.join(OUT, nest_name(scenario, theta, facade, width, average, sides, parent_tag, length, height))
+    out = os.path.join(OUT, nest_name(scenario, theta, facade, width, average, sides, parent_tag, length, height,
+                                      seed))
     if os.path.exists(os.path.join(out, "run.json")) and not force:
         log(f"  {os.path.basename(out)}: already done")
         return out
     t0 = time.time()
-    pack, meta, extra = prepare(scenario, theta, facade, log, width, average, sides, parent_tag, length, height)
+    pack, meta, extra = prepare(scenario, theta, facade, log, width, average, sides, parent_tag, length, height,
+                                seed)
     log(f"  {os.path.basename(out)}: solving")
     res = solve(pack, log=log, backend=backend)
     return finish(out, pack, meta, extra, res, t0, log=log)
@@ -264,23 +271,24 @@ def parent_ring_speed(sc, theta, parent_tag, x, y, ring):
 
 
 def score_path(theta, width=NEST["width_m"], average=AVERAGE_HERO, sides="periodic", parent_tag="",
-               length=NEST["length_m"], height=NEST["height_m"]):
+               length=NEST["length_m"], height=NEST["height_m"], seed=SEED):
     tag = (("" if width == NEST["width_m"] else f"_w{width:g}")
            + ("" if length == NEST["length_m"] else f"_l{length:g}")
            + ("" if height == NEST["height_m"] else f"_h{height:g}")
            + ("" if average == AVERAGE_HERO else f"_avg{average:g}")
            + ("" if sides == "periodic" else "_sides")
-           + (f"_p{parent_tag.strip('_')}" if parent_tag else ""))
+           + (f"_p{parent_tag.strip('_')}" if parent_tag else "")
+           + ("" if seed == SEED else f"_s{seed}"))
     return os.path.join(OUT, f"score_{theta:05.1f}{tag}.json")
 
 
 def score(theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_HERO, sides="periodic",
-          parent_tag="", length=NEST["length_m"], height=NEST["height_m"]):
+          parent_tag="", length=NEST["length_m"], height=NEST["height_m"], seed=SEED):
     from pipeline.wind_export import RunBox, resample
     x, y, ring = tower_ring()
     res = {}
     for sc in (BEFORE, "today"):
-        d = os.path.join(OUT, nest_name(sc, theta, facade, width, average, sides, parent_tag, length, height))
+        d = os.path.join(OUT, nest_name(sc, theta, facade, width, average, sides, parent_tag, length, height, seed))
         with open(os.path.join(d, "run.json"), encoding="utf-8") as f:
             m = json.load(f)
         z = np.load(os.path.join(d, "street.npz"))
@@ -289,26 +297,31 @@ def score(theta, facade=True, log=print, width=NEST["width_m"], average=AVERAGE_
         va = resample(z["street_speed_above"], ok, RunBox(m), x[ring], y[ring])
         k8 = parent_ring_speed(sc, theta, parent_tag, x, y, ring)
         res[sc] = {"median_2m": float(np.nanmedian(v)), "p90_2m": float(np.nanpercentile(v, 90)),
+                   "mean_2m": float(np.nanmean(v)), "p25_2m": float(np.nanpercentile(v, 25)),
+                   "p75_2m": float(np.nanpercentile(v, 75)),
                    "median_2m_next_cell_up": float(np.nanmedian(va)),
                    "n_2m": int(np.isfinite(v).sum()), "median_8m_x_lawn": float(np.nanmedian(k8)),
                    "nesting_check": m["nesting_check"], "convergence": m["convergence_street_speed"]}
     a, b = res[BEFORE], res["today"]
-    out = {"tower": TOWER, "theta": theta, "width_m": width, "length_m": length, "height_m": height,
+    out = {"tower": TOWER, "theta": theta, "width_m": width, "length_m": length, "height_m": height, "gust_seed": seed,
            "average_flow_throughs": average, "sides": sides,
            "parent": parent_name(BEFORE, "dec", theta, PARENT_RES, parent_tag),
            "ring_m": RING_M, "ring_cells": int(ring.sum()),
            "runs": res,
            "change_pct_2m": round((b["median_2m"] / a["median_2m"] - 1) * 100, 1),
            "change_p90_pct_2m": round((b["p90_2m"] / a["p90_2m"] - 1) * 100, 1),
+           "change_mean_pct_2m": round((b["mean_2m"] / a["mean_2m"] - 1) * 100, 1),
+           "change_p25_pct_2m": round((b["p25_2m"] / a["p25_2m"] - 1) * 100, 1),
+           "change_p75_pct_2m": round((b["p75_2m"] / a["p75_2m"] - 1) * 100, 1),
            "change_pct_8m": round((b["median_8m_x_lawn"] / a["median_8m_x_lawn"] - 1) * 100, 1),
            "change_pct_2m_next_cell_up": round((b["median_2m_next_cell_up"] / a["median_2m_next_cell_up"] - 1) * 100,
                                                1),
            "generated": datetime.now().isoformat(timespec="seconds")}
-    with open(score_path(theta, width, average, sides, parent_tag, length, height), "w", encoding="utf-8",
+    with open(score_path(theta, width, average, sides, parent_tag, length, height, seed), "w", encoding="utf-8",
               newline="\n") as f:
         json.dump(out, f, indent=1)
     log(f"  {TOWER}, {theta:g} deg, box {length:g} x {width:g} x {height:g} m, {average:g} flow-throughs, street ring {RING_M[0]:g}-{RING_M[1]:g} m, sides {sides}: change since {BEFORE} "
-        f"{out['change_pct_2m']:+.1f}% at 2 m (windiest tenth {out['change_p90_pct_2m']:+.1f}%), "
+        f"{out['change_pct_2m']:+.1f}% at 2 m (mean {out['change_mean_pct_2m']:+.1f}%, windiest tenth {out['change_p90_pct_2m']:+.1f}%), "
         f"{out['change_pct_8m']:+.1f}% at 8 m; next cell up (2-4 m, does not decide) "
         f"{out['change_pct_2m_next_cell_up']:+.1f}%")
     for sc, r in res.items():
@@ -331,6 +344,7 @@ def main():
     ap.add_argument("--length", type=float, default=NEST["length_m"], help="box length along the wind, m")
     ap.add_argument("--height", type=float, default=NEST["height_m"], help="box height, m")
     ap.add_argument("--average", type=float, default=AVERAGE_HERO, help="flow-throughs averaged")
+    ap.add_argument("--seed", type=int, default=SEED, help="the inlet gusts' random seed (D23 noise test)")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
     t0 = time.time()
@@ -342,9 +356,9 @@ def main():
         for sc in args.scenario:
             run_one(sc, args.dir, log=log, force=args.force, width=args.width, average=args.average,
                     sides=args.sides, parent_tag=args.parent_tag, backend=args.backend, length=args.length,
-                    height=args.height)
+                    height=args.height, seed=args.seed)
     score(args.dir, log=log, width=args.width, average=args.average, sides=args.sides, parent_tag=args.parent_tag,
-          length=args.length, height=args.height)
+          length=args.length, height=args.height, seed=args.seed)
     return 0
 
 
