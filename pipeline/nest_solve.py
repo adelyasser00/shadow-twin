@@ -44,7 +44,12 @@ def solve(p, log=print, backend="auto"):
     solid = p["solid"]
     nz, ny, nx = solid.shape
     prof, gk = p["prof"], int(p["gk"])
-    turb = InflowTurbulence(prof, gk, float(p["res_m"]), ny, iu=p["iu"], seed=int(p.get("seed", 11)))
+    # gust_slices: 256 (the default) repeats the gusts every 256 cells of travel (512 m at 2 m cells), so a
+    # long average keeps replaying the same few eddies (D25); 0 makes them last the whole run, never repeating.
+    slices = int(p.get("gust_slices", 256))
+    if slices <= 0:
+        slices = int(np.ceil((float(p["spinup"]) + float(p["average"])) * nx)) + 1
+    turb = InflowTurbulence(prof, gk, float(p["res_m"]), ny, iu=p["iu"], seed=int(p.get("seed", 11)), slices=slices)
     f = turb.field
     f *= p["fluid_in"][None, None].astype(np.float32)        # no gusts inside the 8 m run's buildings
     f[0] += (p["U_in"][0] - prof[:, None]).astype(np.float32)[None]
@@ -102,6 +107,7 @@ def solve(p, log=print, backend="auto"):
                     "flow_through_steps": round(ft), "spinup_steps": n_spin, "average_steps": n_avg,
                     "samples": int(k_full), "mlups": [round(x) for x in mlups], "device": s.device_name,
                     "backend": kind, "wall_drag": round(s.cd_wall, 5), "gusts_calibrated": turb.calibrated,
+                    "gust_slices": turb.slices,
                     "solve_s": round(time.time() - t0)}}
     log(f"  solved in {out['meta']['solve_s']} s at {np.mean(mlups):.0f} MLUPs on {s.device_name}; street "
         f"halves differ by {conv['median_abs_diff_over_median_speed'] * 100:.1f}%; nesting "
