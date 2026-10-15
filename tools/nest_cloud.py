@@ -102,6 +102,13 @@ def peak_gb(path):
     return 6.4 * nz * ny * nx / 99.3e6 + 2 * 3 * s * nz * ny * 4 / 2**30 / (c ** 3 if c > 1 else 1)
 
 
+def cost(path):
+    """Relative solve time: cells x flow-throughs x cells along the wind (a flow-through's steps)."""
+    z = np.load(path)
+    nz, ny, nx = z["solid"].shape
+    return nz * ny * nx * (float(z["spinup"]) + float(z["average"])) * nx
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("src")
@@ -118,21 +125,22 @@ if __name__ == "__main__":
     print(f"{len(packs)} packs, {gpus()} GPU(s), {ram_gb():.0f} GB RAM; the largest needs about {need:.0f} GB",
           flush=True)
     n = a.parallel or (min(gpus(), len(packs)) if 2 * need <= 0.85 * ram_gb() else 1)
+    packs.sort(key=cost, reverse=True)                       # longest first, so no GPU idles at the end
     if n == 1:
         for p in packs:
             solve_one(p, a.out, a.backend)
     else:
-        procs = []
-        for i, p in enumerate(packs):
-            env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(i % n))
-            procs.append(subprocess.Popen([sys.executable, __file__, p, a.out, "--one", "--backend", a.backend],
-                                          env=env))
-            if len(procs) == n:
-                for q in procs:
-                    q.wait()
-                procs = []
-        for q in procs:
-            q.wait()
+        free, running = list(range(n)), {}
+        while packs or running:
+            while packs and free:
+                g, p = free.pop(0), packs.pop(0)
+                env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(g))
+                running[g] = subprocess.Popen([sys.executable, __file__, p, a.out, "--one", "--backend", a.backend],
+                                              env=env)
+            time.sleep(10)
+            for g in [g for g, q in running.items() if q.poll() is not None]:
+                running.pop(g)
+                free.append(g)
     print("all done", flush=True)
 '''
 
