@@ -88,6 +88,15 @@ FLUID, SOLID, INLET, OUTLET, SIDE = 0, 1, 2, 3, 4
 KAPPA = 0.41
 NACC = 5                        # summed: u, v, w, |u|^2, |u|
 CS_SMAGORINSKY = 0.17
+PAUSE_CHECK_EVERY = 256         # steps between looks for the pause file (Solver.pause)
+
+
+def pause_file():
+    """While this file exists, a running OpenCL solve parks its state in RAM and frees the GPU
+    (for games, other work); delete it and the run carries on exactly where it was. TWIN_GPU_PAUSE
+    moves it; default: PAUSE_GPU in the repository root."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.environ.get("TWIN_GPU_PAUSE") or os.path.join(root, "PAUSE_GPU")
 
 
 KERNEL = r"""
@@ -322,40 +331,27 @@ class Solver:
         self.cd_wall = h["cd_wall"]
         self.facade_drag = h["facade_drag"]
 
-        self.ctx = cl.Context([device or pick_device()])
-        self.queue = cl.CommandQueue(self.ctx)
-        dev = self.ctx.devices[0]
-        self.device_name = dev.name.strip()
-        mf = cl.mem_flags
+        self._dev = device or pick_device()
+        self.device_name = self._dev.name.strip()
         lattice_bytes = 19 * 2 * n
-        if lattice_bytes > dev.max_mem_alloc_size:
+        if lattice_bytes > self._dev.max_mem_alloc_size:
             raise MemoryError(f"{n:,} cells need {lattice_bytes / 2**20:.0f} MB per lattice, "
-                              f"the device allows {dev.max_mem_alloc_size / 2**20:.0f} MB per buffer")
-        src = KERNEL % dict(nx=nx, ny=ny, nz=nz, n=n, tau0=tau0, smag=smag, slip=int(bool(slip)),
-                            sides=int(sides is not None),
-                            idx=_csv(IDX),
-                            cx=_csv(C[:, 0]), cy=_csv(C[:, 1]), cz=_csv(C[:, 2]),
-                            w=_csv(W, "{:.9f}f"), opp=_csv(OPP), mz=_csv(MZ))
-        self.prg = cl.Program(self.ctx, src).build(options=["-cl-fast-relaxed-math"] if fast_math else [])
-        self.k_step = cl.Kernel(self.prg, "step")
-        self.fa = cl.Buffer(self.ctx, mf.READ_WRITE, lattice_bytes)
-        self.fb = cl.Buffer(self.ctx, mf.READ_WRITE, lattice_bytes)
-        self.d_flag = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=flag.ravel())
-        self.d_veg = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=veg.ravel())
-        self.d_prof = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=prof)
-        self.d_u = cl.Buffer(self.ctx, mf.READ_WRITE, 3 * 4 * n)
-        self.d_acc = cl.Buffer(self.ctx, mf.READ_WRITE, NACC * 4 * n)
-        cl.enqueue_fill_buffer(self.queue, self.d_acc, np.float32(0), 0, NACC * 4 * n)
+                              f"the device allows {self._dev.max_mem_alloc_size / 2**20:.0f} MB per buffer")
+        self._src = KERNEL % dict(nx=nx, ny=ny, nz=nz, n=n, tau0=tau0, smag=smag, slip=int(bool(slip)),
+                                  sides=int(sides is not None),
+                                  idx=_csv(IDX),
+                                  cx=_csv(C[:, 0]), cy=_csv(C[:, 1]), cz=_csv(C[:, 2]),
+                                  w=_csv(W, "{:.9f}f"), opp=_csv(OPP), mz=_csv(MZ))
+        self._opts = ["-cl-fast-relaxed-math"] if fast_math else []
+        # Kept on the host so the device side can be released and rebuilt (pause()).
+        self._static = {"flag": flag.ravel(), "veg": veg.ravel(), "prof": prof,
+                        "side": (sides.ravel() if sides is not None else np.zeros(1, np.float32))}
         self.gsize = (int(-(-n // 128) * 128),)
         self.lsize = (128,)
         self.turb = turbulence
-        zero = np.zeros(3 * ny * nz, np.float32)
-        self.d_ta = cl.Buffer(self.ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=zero)
-        self.d_tb = cl.Buffer(self.ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=zero)
-        self._slice = None
-        self.d_side = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR,
-                                hostbuf=(sides.ravel() if sides is not None else np.zeros(1, np.float32)))
         self.sides = sides is not None
+        self._device_up()
+        cl.enqueue_fill_buffer(self.queue, self.d_acc, np.float32(0), 0, NACC * 4 * n)
         self.prg.init(self.queue, self.gsize, self.lsize, self.fa, self.d_u, self.d_flag, self.d_prof)
         self.queue.finish()
         self.steps_done = 0
@@ -367,11 +363,72 @@ class Solver:
             + (", on facades too" if self.facade_drag else "")
             + (", sides held at a coarser run's wind" if self.sides else ""))
 
+    def _device_up(self, state=None):
+        """Context, program and buffers on the GPU; `state` (from pause) restores the run exactly."""
+        import pyopencl as cl
+        n, (nz, ny, _) = self.n, self.shape
+        mf = cl.mem_flags
+        self.ctx = cl.Context([self._dev])
+        self.queue = cl.CommandQueue(self.ctx)
+        self.prg = cl.Program(self.ctx, self._src).build(options=self._opts)
+        self.k_step = cl.Kernel(self.prg, "step")
+        st = self._static
+        self.d_flag = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=st["flag"])
+        self.d_veg = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=st["veg"])
+        self.d_prof = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=st["prof"])
+        self.d_side = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=st["side"])
+        zero = np.zeros(3 * ny * nz, np.float32)
+        self.d_ta = cl.Buffer(self.ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=zero)
+        self.d_tb = cl.Buffer(self.ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=zero)
+        self._slice = None                                   # the gust slices are uploaded again on the next step
+        if state is None:
+            self.fa = cl.Buffer(self.ctx, mf.READ_WRITE, 19 * 2 * n)
+            self.fb = cl.Buffer(self.ctx, mf.READ_WRITE, 19 * 2 * n)
+            self.d_u = cl.Buffer(self.ctx, mf.READ_WRITE, 3 * 4 * n)
+            self.d_acc = cl.Buffer(self.ctx, mf.READ_WRITE, NACC * 4 * n)
+        else:
+            self.fa = cl.Buffer(self.ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=state["fa"])
+            self.fb = cl.Buffer(self.ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=state["fb"])
+            self.d_u = cl.Buffer(self.ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=state["u"])
+            self.d_acc = cl.Buffer(self.ctx, mf.READ_WRITE | mf.COPY_HOST_PTR, hostbuf=state["acc"])
+            self.queue.finish()
+
+    def _device_down(self):
+        """Copy the run's state to RAM and release everything on the GPU (context included)."""
+        import pyopencl as cl
+        self.queue.finish()
+        n = self.n
+        state = {"fa": np.empty(19 * n, np.float16), "fb": np.empty(19 * n, np.float16),
+                 "u": np.empty(3 * n, np.float32), "acc": np.empty(NACC * n, np.float32)}
+        for key, buf in (("fa", self.fa), ("fb", self.fb), ("u", self.d_u), ("acc", self.d_acc)):
+            cl.enqueue_copy(self.queue, state[key], buf)
+        self.queue.finish()
+        for name in ("fa", "fb", "d_u", "d_acc", "d_flag", "d_veg", "d_prof", "d_side", "d_ta", "d_tb"):
+            getattr(self, name).release()
+            setattr(self, name, None)
+        self.k_step = self.prg = self.queue = self.ctx = None
+        return state
+
+    def pause(self, step=None):
+        """Free the GPU while PAUSE_GPU exists (see pause_file()), then carry on exactly where the run was."""
+        t = time.time()
+        state = self._device_down()
+        self.log(f"    paused at step {self.steps_done if step is None else step:,}: GPU released; "
+                 f"delete {pause_file()} to resume")
+        while os.path.exists(pause_file()):
+            time.sleep(10)
+        self._device_up(state)
+        self.log(f"    resumed after {(time.time() - t) / 60:.0f} min")
+
     def run(self, steps, accumulate_every=0, log_every=0):
         """Advance `steps` steps; sum velocity every `accumulate_every` steps (0: never)."""
         t = time.time()
-        k = self.k_step
         for s in range(steps):
+            if s % PAUSE_CHECK_EVERY == 0 and os.path.exists(pause_file()):
+                el = time.time() - t
+                self.pause(self.steps_done + s)
+                t = time.time() - el                          # paused time doesn't count against MLUPs
+            k = self.k_step
             acc = 1 if accumulate_every and (s % accumulate_every == 0) else 0
             tw = self._inflow(self.steps_done + s)
             k(self.queue, self.gsize, self.lsize, self.fa, self.fb, self.d_flag, self.d_veg,
