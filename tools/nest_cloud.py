@@ -1,6 +1,7 @@
 """
-Run a nested 2 m wind box on a cloud GPU (Kaggle's free tier: one P100 or
-two T4s, 16 GB each), for boxes too big for this laptop's 4 GB.
+Run a nested 2 m wind box on a cloud GPU (Kaggle's free tier: two T4s,
+16 GB each; the P100 option is retired), for boxes too big for this
+laptop's 4 GB.
 
     TWIN_CITY=rotterdam .venv-heat/Scripts/python -I tools/nest_cloud.py pack --dir 247.5 --width 2220 --parent-tag _zh --sides parent --average 6
         builds every input here (city data stays here) and writes an upload
@@ -145,7 +146,7 @@ if __name__ == "__main__":
 '''
 
 
-NOTEBOOK_CELL = r'''# Nested 2 m wind box (tools/nest_cloud.py). Settings: Accelerator GPU P100 or GPU T4 x2; Internet on.
+NOTEBOOK_CELL = r'''# Nested 2 m wind box (tools/nest_cloud.py). Settings: Accelerator GPU T4 x2; Internet on.
 import glob, os, shutil, subprocess, sys, zipfile
 hits = glob.glob("/kaggle/input/**/run_cloud.py", recursive=True)
 if not hits:                                    # the upload stayed a zip: unpack it outside the output folder
