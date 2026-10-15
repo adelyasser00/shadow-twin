@@ -231,8 +231,14 @@ def unpack(args):
         extra = {"building": ex["building"], "ground": ex["ground"]}
         out = os.path.join(args.out or N.OUT, name)
         if os.path.exists(os.path.join(out, "run.json")):
-            if args.out:
+            with open(os.path.join(out, "run.json"), encoding="utf-8") as f:
+                there = json.load(f)
+            same = there.get("device") == rmeta["device"] and there.get("samples") == rmeta["samples"]
+            if args.out or same:
+                # Unpacked from this very result before: nothing to write; still scored below.
                 print(f"{name}: already unpacked")
+                meta.setdefault("blocks", rmeta.get("blocks", 2))
+                done.append(meta)
                 continue
             # Also run here: the cloud copy goes beside it and the two are compared (D22, box 4).
             copy = os.path.join(root, "cloud_copy", name)
@@ -241,6 +247,7 @@ def unpack(args):
             twins.setdefault(name.split("_dec_", 1)[1], {})[name.split("_dec_", 1)[0]] = (out, copy)
             continue
         N.finish(out, pk, meta, extra, res, time.time() - rmeta.get("solve_s", 0))
+        meta.setdefault("blocks", rmeta.get("blocks", 2))
         done.append(meta)
     if args.out:
         return

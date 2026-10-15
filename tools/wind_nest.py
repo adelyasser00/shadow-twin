@@ -185,7 +185,7 @@ def prepare(scenario, theta, facade=True, log=print, width=NEST["width_m"], aver
             "blocks": int(blocks)}
     meta = {"scenario": scenario, "season": "dec", "theta_from_deg": float(theta), "res_m": RES,
             "box": bx.meta(), "box_size": box, "gmin_m": gmin, "ground_layer": gk, "tower": TOWER,
-            "tower_xy": [float(tx), float(ty)], "parent": pname, "gust_seed": int(seed), "gusts": gusts,
+            "tower_xy": [float(tx), float(ty)], "parent": pname, "gust_seed": int(seed), "gusts": gusts, "blocks": int(blocks),
             "smagorinsky": 0.17, "z0_m": Z0_M,
             "walls": "slip + wall-law drag" + (" on ground, roofs and facades" if facade else " on ground and roofs"),
             "sides": "periodic" if sides == "periodic" else "the 8 m run's time-mean wind",
