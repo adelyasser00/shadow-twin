@@ -13,6 +13,8 @@ statistics, because the median alone proved jumpy (NL_NOTES D22, D23).
         gauge the seed gap, and how well is each change known
     TWIN_CITY=rotterdam .venv-heat/Scripts/python -I tools/nest_ring.py drift <box>
         D26: a run averaged in blocks: drift, settling time, settled change
+    TWIN_CITY=rotterdam .venv-heat/Scripts/python -I tools/nest_ring.py pool <a1,a2> [<b1,b2>]
+        D27: blocks of several seeds pooled per group; two groups are compared
 
 A box is a run folder name without its scenario, e.g.
 dec_247.5_2m_fw_w600_avg6_sides_pzh; a path prefix "cloud:" reads
@@ -191,6 +193,61 @@ def drift(args):
             json.dump(out, f, indent=1)
 
 
+def block_levels(N, box, ring_xy):
+    """Ring mean per block, (before, today), for a run averaged in blocks."""
+    from pipeline.wind_export import RunBox, resample
+    x, y, ring = ring_xy
+    out = []
+    for sc in (N.BEFORE, "today"):
+        d = folder(N, box, sc)
+        with open(os.path.join(d, "run.json"), encoding="utf-8") as f:
+            m = json.load(f)
+        z = np.load(os.path.join(d, "street.npz"))
+        ok = (~z["roof"]) & np.isfinite(z["street_speed"])
+        v = np.stack([resample(b, ok, RunBox(m), x[ring], y[ring]) for b in z["street_blocks"]])
+        out.append(v)
+    keep = np.isfinite(out[0]).all(axis=0) & np.isfinite(out[1]).all(axis=0)
+    return out[0][:, keep].mean(axis=1), out[1][:, keep].mean(axis=1)
+
+
+def pooled(N, boxes, ring_xy):
+    """D27: blocks of several runs (seeds) pooled: change of the pooled ring means, and its batch-means
+    standard error (widened by sqrt((1+r)/(1-r)) when the mean lag-1 correlation r of the block changes
+    passes 0.3)."""
+    a, b, per = [], [], []
+    for box in boxes:
+        aa, bb = block_levels(N, box, ring_xy)
+        a += list(aa)
+        b += list(bb)
+        per.append((bb / aa - 1) * 100)
+    a, b = np.array(a), np.array(b)
+    change = (b.mean() / a.mean() - 1) * 100
+    r1 = float(np.mean([np.corrcoef(c[:-1], c[1:])[0, 1] for c in per]))
+    infl = float(np.sqrt((1 + r1) / (1 - r1))) if r1 > 0.3 else 1.0
+    allc = np.concatenate(per)
+    return {"boxes": boxes, "change": float(change), "se": float(allc.std(ddof=1) / np.sqrt(len(allc)) * infl),
+            "blocks": int(len(allc)), "lag1": round(r1, 3), "widened": round(infl, 3)}
+
+
+def pool(args):
+    import tools.wind_nest as N
+    ring_xy = N.tower_ring()
+    groups = [g.split(",") for g in args.groups]
+    res = [pooled(N, g, ring_xy) for g in groups]
+    for r in res:
+        print(f"  {' + '.join(r['boxes'])}: {r['change']:+.1f}% +- {r['se']:.1f} ({r['blocks']} blocks, "
+              f"lag-1 {r['lag1']:+.2f}, widened x{r['widened']:.2f})")
+    out = {"groups": res}
+    if len(res) == 2:
+        d = res[1]["change"] - res[0]["change"]
+        sd = float(np.hypot(res[0]["se"], res[1]["se"]))
+        out.update({"diff": d, "diff_se": sd, "within_2_se": bool(abs(d) < 2 * sd)})
+        print(f"  second - first: {d:+.1f} points, {abs(d) / sd:.2f} standard errors of the difference")
+    if args.save:
+        with open(args.save, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(out, f, indent=1)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="what", required=True)
@@ -207,8 +264,12 @@ def main():
     d = sub.add_parser("drift")
     d.add_argument("box")
     d.add_argument("--save", help="write the reading as JSON here")
+    o = sub.add_parser("pool")
+    o.add_argument("groups", nargs="+", help="comma-separated boxes pooled together (e.g. two seeds); two "
+                                             "groups are also compared")
+    o.add_argument("--save", help="write the result as JSON here")
     args = ap.parse_args()
-    {"table": table, "twins": twins, "noise": noise_check, "drift": drift}[args.what](args)
+    {"table": table, "twins": twins, "noise": noise_check, "drift": drift, "pool": pool}[args.what](args)
     return 0
 
 
