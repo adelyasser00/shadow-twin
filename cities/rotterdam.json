@@ -218,6 +218,22 @@
     "isTodayBuild() ? \"2016\" : \"today\", w.season"
    ],
    [
+    "isTodayBuild() ? \"today\" : \"2017\"",
+    "isTodayBuild() ? \"today\" : \"2016\""
+   ],
+   [
+    "\"Street wind, today vs 2017\"",
+    "\"Street wind, today vs 2016\""
+   ],
+   [
+    "Same hour in 2017",
+    "Same hour in 2016"
+   ],
+   [
+    "The LiDAR surface was captured in May\n    2017.",
+    "The surfaces are AHN3 LiDAR (2016) and\n    AHN5 (2023)."
+   ],
+   [
     "Central Park within 1.5 km of 59th Street, ground only ",
     "Open ground of five neighbourhoods within 1 km of the towers that grew, "
    ],
