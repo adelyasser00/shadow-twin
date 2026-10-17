@@ -5,9 +5,12 @@ a streak then shows which way the air goes, and its length how fast.
 
     python serve.py                       (or any http server on viewer/, port 8765)
     .venv-heat/Scripts/python tools/render_wind_frames.py [camera] [exposures] [step] [2017]
+    .venv-heat/Scripts/python tools/render_wind_frames.py --city rotterdam --dir 247.5 zhUpwindP 12 0.6 [2016]
 
 Same headless Chrome and cameras as tools/render_wind.py, never your own
-browser; "2017" renders the 2017 build. Writes data/wind/figures/post/frames_<camera>[_2017]_<stamp>/ with
+browser; "2017" renders the 2017 build (another city: its before year).
+--city reads viewer/cities/<city>/ and writes under data/cities/<city>/figures/post/;
+--dir shows that wind direction's run instead of the heat day's wind. Writes data/wind/figures/post/frames_<camera>[_2017]_<stamp>/ with
 frame_00.png ... and meta.json (camera, tower screen positions, wind).
 """
 
@@ -34,13 +37,41 @@ QUERY = "layer=wind&season=dec&t=12:30&anim=1&full=1"
 SIZE = (1080, 1350)
 
 
+# --dir: show this wind direction's run instead of the heat day's wind (the viewer picks the nearest run).
+WIND_DIR = """
+(async () => {
+  const s0 = windNow().speed;
+  windNow = () => ({ dir: %(dir)f, speed: s0, season: hseason().id, live: false });
+  await updateWindLines();
+  refresh();
+  await new Promise(r => setTimeout(r, 3000));
+  const run = currentWindRun();
+  return run && run.name;
+})()
+"""
+
+
+def flag(args, name, default=None):
+    if name not in args:
+        return default
+    k = args.index(name)
+    v = args[k + 1]
+    del args[k:k + 2]
+    return v
+
+
 def main():
-    cam = sys.argv[1] if len(sys.argv) > 1 else "upwindP"
-    n = int(sys.argv[2]) if len(sys.argv) > 2 else 12
-    step = float(sys.argv[3]) if len(sys.argv) > 3 else 1.25
-    y2017 = len(sys.argv) > 4 and sys.argv[4] == "2017"
-    page = "shadow-twin-2017.html" if y2017 else PAGE
-    out_dir = os.path.join(OUT, f"frames_{cam}{'_2017' if y2017 else ''}_{datetime.now():%Y%m%d_%H%M%S}")
+    args = sys.argv[1:]
+    city = flag(args, "--city")            # e.g. rotterdam: viewer/cities/<city>/, its before year from the page names
+    wdir = flag(args, "--dir")
+    cam = args[0] if len(args) > 0 else "upwindP"
+    n = int(args[1]) if len(args) > 1 else 12
+    step = float(args[2]) if len(args) > 2 else 1.25
+    before = args[3] if len(args) > 3 else None
+    prefix = f"cities/{city}/" if city else ""
+    page = prefix + (f"shadow-twin-{before}.html" if before else PAGE)
+    out_dir = os.path.join(OUT if not city else os.path.join(HERE, "data", "cities", city, "figures", "post"),
+                           f"frames_{cam}{'_' + before if before else ''}_{datetime.now():%Y%m%d_%H%M%S}")
     os.makedirs(out_dir)
     prof = tempfile.mkdtemp(prefix="render-wind-frames-")
     proc = subprocess.Popen([CHROME, "--headless=new", f"--remote-debugging-port={PORT}",
@@ -70,6 +101,8 @@ def main():
         tab.call("Page.navigate", url=f"{BASE}{page}?{QUERY}&r={int(time.time())}")
         time.sleep(3)
         secs = tab.js(READY, timeout_s=600)
+        if wdir is not None:
+            print(f"wind run in view: {tab.js(WIND_DIR % {'dir': float(wdir)}, timeout_s=300)}", flush=True)
         res = tab.js(SHOOT % {"cam": json.dumps(CAMS[cam]), "n": n, "step": step}, timeout_s=900)
         for k, s in enumerate(res["shots"]):
             with open(os.path.join(out_dir, f"frame_{k:02d}.png"), "wb") as f:

@@ -45,6 +45,11 @@ CAMS = {
     # Side view along 57th Street, to see air thrown down the towers.
     "side": {"lat": 40.7685, "lon": -73.9700, "h": 260, "heading": 225.0, "pitch": -12},
     "top": {"lat": 40.75650, "lon": -73.98330, "h": 2300, "heading": 28.9, "pitch": -58},
+    # Rotterdam: 1 km west-south-west of Zalmhaven, looking downwind on the usual 247.5 deg wind.
+    "zhUpwindP": {"lat": 51.906915, "lon": 4.467266, "h": 550, "heading": 67.5, "pitch": -30},
+    # Closer, as New York's upwindP in tower heights: about 3.4 H away, 2 H up.
+    "zhUpwindC": {"lat": 51.907948, "lon": 4.471302, "h": 420, "heading": 67.5, "pitch": -28},
+    "zhUpwindL": {"lat": 51.908300, "lon": 4.472000, "h": 330, "heading": 72.0, "pitch": -22},
 }
 
 SHOTS = [
